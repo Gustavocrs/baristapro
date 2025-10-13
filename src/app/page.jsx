@@ -10,6 +10,7 @@ export default function HomePage() {
   const [initialSettings, setInitialSettings] = useState(null);
   const [aiDiagnosis, setAiDiagnosis] = useState(null);
   const [firebaseError, setFirebaseError] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [theme, setTheme] = useState("system"); // 'light', 'dark', or 'system'
 
   // State to hold input values, making them controlled components
@@ -30,6 +31,13 @@ export default function HomePage() {
   const cameraFeedRef = useRef(null);
   const photoCanvasRef = useRef(null);
   const cameraStreamRef = useRef(null);
+  const inputsRef = useRef(inputs);
+  const firebaseUnavailableRef = useRef(false);
+
+  // keep inputsRef up to date
+  useEffect(() => {
+    inputsRef.current = inputs;
+  }, [inputs]);
 
   // --- LÓGICA DE CALIBRAÇÃO ---
   const updateUI = useCallback((currentInputs) => {
@@ -46,21 +54,21 @@ export default function HomePage() {
     setInitialSettings(
       <ul className="list-disc list-inside space-y-1">
         <li>
-          Dose: <b>${dose}g</b>
+          Dose: <b>{dose}g</b>
         </li>
         <li>
-          Proporção: <b>1:${ratio}</b>
+          Proporção: <b>1:{ratio}</b>
         </li>
         <li>
           Quantidade na Xícara (Yield):{" "}
           <b className="text-lg text-blue-600 dark:text-blue-400">
-            ${yieldAmount}g
+            {yieldAmount}g
           </b>
         </li>
         <li>
           Seu Tempo Real:{" "}
           <b className="text-lg text-blue-600 dark:text-blue-400">
-            ${actualTime}s
+            {actualTime}s
           </b>{" "}
           (Alvo: 22-32s)
         </li>
@@ -323,13 +331,10 @@ export default function HomePage() {
       const constraints = {video: {facingMode: "environment"}};
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       cameraStreamRef.current = stream;
-      // Abrimos o modal antes de garantir attach para evitar problemas de ref nulo
+      // abrir modal e anexar o stream ao elemento de vídeo
       setCameraModalOpen(true);
-      // small timeout para garantir que o video element esteja montado
       setTimeout(() => {
-        if (cameraFeedRef.current) {
-          cameraFeedRef.current.srcObject = stream;
-        }
+        if (cameraFeedRef.current) cameraFeedRef.current.srcObject = stream;
       }, 50);
     } catch (err) {
       console.error("Erro ao acessar a câmera: ", err);
@@ -341,7 +346,7 @@ export default function HomePage() {
 
   const stopCamera = () => {
     if (cameraStreamRef.current) {
-      cameraStreamRef.current.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current.getTracks().forEach((t) => t.stop());
     }
     if (cameraFeedRef.current) {
       cameraFeedRef.current.srcObject = null;
@@ -350,16 +355,124 @@ export default function HomePage() {
     setCameraModalOpen(false);
   };
 
-  // Ensure the video element gets the stream when modal opens
   useEffect(() => {
-    if (isCameraModalOpen && cameraStreamRef.current && cameraFeedRef.current) {
-      cameraFeedRef.current.srcObject = cameraStreamRef.current;
-    }
-    // when modal is closed remove stream from video element
-    if (!isCameraModalOpen && cameraFeedRef.current) {
-      cameraFeedRef.current.srcObject = null;
-    }
-  }, [isCameraModalOpen]);
+    let mounted = true;
+
+    const doLoad = async () => {
+      setIsLoading(true);
+      try {
+        if (!db) {
+          console.warn("Firestore não inicializado. Pulando loadSettings.");
+          const local = loadLocally();
+          if (local && mounted) {
+            setInputs((prev) => ({...prev, ...local}));
+            updateUI(local);
+            setFirebaseError(
+              "Firebase não configurado. Carregado configurações locais."
+            );
+          } else if (mounted) {
+            setFirebaseError(
+              "Firebase não configurado. Usando valores padrão locais."
+            );
+            updateUI(inputsRef.current);
+          }
+          return;
+        }
+
+        if (firebaseUnavailableRef.current) {
+          const local = loadLocally();
+          if (local && mounted) {
+            setInputs((prev) => ({...prev, ...local}));
+            updateUI(local);
+            setFirebaseError(
+              "Firebase sem permissão. Carregado configuração local."
+            );
+          }
+          return;
+        }
+
+        const docRef = doc(db, "configurations", "default");
+        const docSnap = await getDoc(docRef);
+
+        if (!mounted) return;
+
+        if (docSnap.exists()) {
+          const settings = docSnap.data();
+          setInputs((prev) => ({...prev, ...settings}));
+          updateUI(settings);
+        } else {
+          const local = loadLocally();
+          if (local && mounted) {
+            setInputs((prev) => ({...prev, ...local}));
+            updateUI(local);
+            setFirebaseError(
+              "Nenhuma configuração na nuvem. Usando dados locais. Salve para sincronizar."
+            );
+            return;
+          }
+          console.log(
+            "Nenhum documento de configuração encontrado, usando valores padrão."
+          );
+          updateUI(inputsRef.current);
+        }
+      } catch (error) {
+        const code = error?.code || null;
+        const msg = error?.message || String(error);
+
+        // Detect permission issues explicitly
+        const isPermissionError =
+          code === "permission-denied" ||
+          String(msg).toLowerCase().includes("permission") ||
+          String(msg).toLowerCase().includes("insufficient");
+
+        // Log error only the first time to avoid spamming the console
+        if (!firebaseUnavailableRef.current) {
+          if (!isPermissionError)
+            console.error("Erro ao carregar configurações: ", error);
+        }
+
+        if (isPermissionError) {
+          // mark as unavailable so we stop retrying and logging
+          firebaseUnavailableRef.current = true;
+          const local = loadLocally();
+          if (local && mounted) {
+            setInputs((prev) => ({...prev, ...local}));
+            updateUI(local);
+            setFirebaseError(
+              "Sem permissão para acessar o Firebase. Carregado configuração local."
+            );
+            return;
+          }
+        }
+
+        const local = loadLocally();
+        if (local && mounted) {
+          setInputs((prev) => ({...prev, ...local}));
+          updateUI(local);
+          setFirebaseError(
+            "Erro ao carregar do Firebase. Carregado configuração local."
+          );
+        } else if (mounted) {
+          setFirebaseError(
+            error?.message || "Erro ao carregar configurações do Firebase."
+          );
+          updateUI(inputsRef.current);
+        }
+      } finally {
+        // Garante que o loading termine mesmo em caso de erro
+        if (mounted) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    doLoad();
+
+    return () => {
+      mounted = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [updateUI]);
 
   const takePhoto = () => {
     const canvas = photoCanvasRef.current;
@@ -386,119 +499,140 @@ export default function HomePage() {
     stopCamera();
   };
 
+  // Função para converter um arquivo para Base64
+  const fileToGenerativePart = async (file) => {
+    const base64EncodedDataPromise = new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result.split(",")[1]);
+      reader.readAsDataURL(file);
+    });
+    return {
+      inlineData: {
+        data: await base64EncodedDataPromise,
+        mimeType: file.type,
+      },
+    };
+  };
+
   const analyzeWithAI = async () => {
+    setAiDiagnosis(null); // Limpa a análise anterior
     setAiDiagnosis(
       <div className="p-4 bg-purple-100 dark:bg-purple-900/30 rounded-lg animate-pulse">
         <h3 className="font-semibold text-lg mb-2 text-purple-700 dark:text-purple-300">
           Analisando com IA...
         </h3>
         <p className="text-sm text-purple-600 dark:text-purple-400">
-          Aguarde um momento. Estou combinando os dados da sua extração com as
-          fotos para gerar um diagnóstico detalhado.
+          Aguarde um momento. Estou enviando os dados da sua extração para o
+          Gemini AI...
         </p>
       </div>
     );
 
-    setTimeout(() => {
-      const aiResponse = (
-        <>
-          <h3 className="font-semibold text-lg mb-2 text-purple-700 dark:text-purple-300">
-            Análise da IA (Exemplo)
-          </h3>
-          <div className="space-y-3 text-sm">
-            <p>
-              Com base nos seus parâmetros, a extração parece estar no caminho
-              certo. O tempo de {inputs.extractionTime}s é bom. No entanto, a
-              foto da crema sugere uma leve canalização na borda direita do
-              filtro, indicada por uma área mais clara.
-            </p>
-            <p>
-              <strong>Sugestão Principal:</strong> Melhore a distribuição do pó
-              de café (WDT) antes de compactar. Certifique-se de que o pó esteja
-              uniformemente distribuído e sem grumos para evitar a canalização.
-            </p>
-            <p>
-              <strong>Ajuste Fino:</strong> Se o sabor ainda pender para o
-              ácido, mesmo com a distribuição corrigida, considere aumentar a
-              temperatura da água em 1-2 graus Celsius, se sua máquina permitir,
-              para auxiliar na extração de torras mais claras como a que você
-              está usando.
-            </p>
-          </div>
-        </>
+    try {
+      // Converte as imagens para o formato que a API do Gemini espera
+      const imageParts = await Promise.all(
+        uploadedFiles.map(fileToGenerativePart)
       );
+
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({inputs, imageParts}), // Envia os inputs e as imagens
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          errorData.error || "Falha ao comunicar com a API de análise."
+        );
+      }
+
+      const {analysis} = await response.json();
+
       setAiDiagnosis(
-        <div className="p-4 border border-purple-300 dark:border-purple-700 rounded-lg">
-          {aiResponse}
+        <div
+          className="p-4 border border-purple-300 dark:border-purple-700 rounded-lg"
+          dangerouslySetInnerHTML={{__html: analysis}}
+        />
+      );
+    } catch (error) {
+      console.error("Erro na análise com IA:", error);
+      setAiDiagnosis(
+        <div className="p-4 bg-red-100 dark:bg-red-900/30 rounded-lg">
+          <h3 className="font-semibold text-lg mb-2 text-red-700 dark:text-red-300">
+            Erro na Análise
+          </h3>
+          <p className="text-sm text-red-600 dark:text-red-400">
+            {error.message}
+          </p>
         </div>
       );
-    }, 2500);
+    }
   };
 
   // --- LÓGICA DE SALVAR/CARREGAR E TEMA ---
+  const LOCAL_SETTINGS_KEY = "meuexpresso.settings";
+
+  const saveLocally = (data) => {
+    try {
+      localStorage.setItem(LOCAL_SETTINGS_KEY, JSON.stringify(data));
+      setFirebaseError(
+        "Configurações salvas localmente (Firebase indisponível/sem permissão)."
+      );
+    } catch (e) {
+      console.error("Erro ao salvar localmente:", e);
+    }
+  };
+
+  const loadLocally = () => {
+    try {
+      const raw = localStorage.getItem(LOCAL_SETTINGS_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch (e) {
+      console.error("Erro ao carregar configurações locais:", e);
+      return null;
+    }
+  };
   const saveSettings = async () => {
     try {
       if (!db) {
         alert(
-          "Firebase não está configurado. As configurações serão salvas localmente apenas temporariamente."
+          "Firebase não está configurado. As configurações serão salvas localmente."
         );
-        // Como fallback simples, podemos salvar no localStorage
-        localStorage.setItem("meuexpresso.settings", JSON.stringify(inputs));
+        saveLocally(inputs);
         return;
       }
       // Usaremos um ID fixo "default" para salvar a configuração do usuário
       const docRef = doc(db, "configurations", "default");
       await setDoc(docRef, inputs);
       console.log("Configurações salvas com sucesso no Firebase!");
+      setFirebaseError("Configurações salvas no Firebase.");
       // Adicionar um feedback visual seria uma boa ideia aqui
     } catch (error) {
       console.error("Erro ao salvar configurações: ", error);
-      alert("Não foi possível salvar as configurações.");
+      // Se for erro de permissão (permission-denied) ou similar, faz fallback para local
+      const msg = error?.message || String(error);
+      if (
+        msg.toLowerCase().includes("permission") ||
+        msg.toLowerCase().includes("insufficient")
+      ) {
+        saveLocally(inputs);
+        alert(
+          "Sem permissão para salvar no Firebase. As configurações foram salvas localmente."
+        );
+      } else {
+        alert("Não foi possível salvar as configurações.");
+      }
     }
   };
-
-  const loadSettings = useCallback(async () => {
-    try {
-      if (!db) {
-        console.warn("Firestore não inicializado. Pulando loadSettings.");
-        setFirebaseError(
-          "Firebase não configurado. Usando valores padrão locais."
-        );
-        updateUI(inputs);
-        return;
-      }
-
-      const docRef = doc(db, "configurations", "default");
-      const docSnap = await getDoc(docRef);
-
-      if (docSnap.exists()) {
-        const settings = docSnap.data();
-        setInputs((prev) => ({...prev, ...settings}));
-        updateUI(settings); // Atualiza a UI com os dados carregados
-      } else {
-        console.log(
-          "Nenhum documento de configuração encontrado, usando valores padrão."
-        );
-        updateUI(inputs); // Garante que a UI seja renderizada com os padrões
-      }
-    } catch (error) {
-      console.error("Erro ao carregar configurações: ", error);
-      // Tratamento de erro: configura mensagem para UI e usa padrões locais
-      setFirebaseError(
-        error?.message || "Erro ao carregar configurações do Firebase."
-      );
-      updateUI(inputs); // Renderiza com os padrões em caso de erro
-    }
-  }, [updateUI, inputs]);
 
   const handleThemeToggle = () => {
     const newTheme = theme === "dark" ? "light" : "dark";
     setTheme(newTheme);
   };
-
-  useEffect(() => {
-    loadSettings();
-  }, [loadSettings]);
 
   // Effect for theme management
   useEffect(() => {
@@ -526,11 +660,43 @@ export default function HomePage() {
     }
   }, [theme]);
 
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-50 dark:bg-gray-900">
+        <div className="text-center">
+          <svg
+            className="mx-auto h-12 w-12 text-blue-600 animate-spin"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle
+              className="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              strokeWidth="4"
+            ></circle>
+            <path
+              className="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+            ></path>
+          </svg>
+          <p className="mt-4 text-lg font-medium text-gray-700 dark:text-gray-300">
+            Carregando configurações...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="max-w-7xl mx-auto p-6">
-        {firebaseError && (
-          <div className="mb-4 p-3 rounded-md bg-yellow-100 border border-yellow-300 text-yellow-800">
+        {firebaseError && !firebaseError.includes("salvas no Firebase") && (
+          <div className="mb-4 p-3 rounded-md bg-yellow-100 dark:bg-yellow-900/30 border border-yellow-300 dark:border-yellow-700 text-yellow-800 dark:text-yellow-200">
             <strong>Atenção:</strong> {firebaseError}
           </div>
         )}
@@ -708,93 +874,17 @@ export default function HomePage() {
                   ))}
                 </div>
               </div>
-              <div className="md:col-span-2 mt-6 grid grid-cols-2 gap-4">
-                <label
-                  htmlFor="photo-upload"
-                  className="w-full cursor-pointer bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md flex items-center justify-center transition-colors"
-                >
-                  <svg
-                    className="w-5 h-5 mr-2"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
-                    ></path>
-                  </svg>
-                  Carregar Foto
-                </label>
-                <input
-                  id="photo-upload"
-                  type="file"
-                  className="hidden"
-                  accept="image/*"
-                  multiple
-                  onChange={(e) => handleFiles(e.target.files)}
-                />
-                <button
-                  onClick={startCamera}
-                  id="camera-btn"
-                  className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md flex items-center justify-center transition-colors"
-                >
-                  <svg
-                    className="w-5 h-5 mr-2"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"
-                    ></path>
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"
-                    ></path>
-                  </svg>
-                  Usar Câmera
-                </button>
-                <div className="col-span-2 mt-2">
-                  <button
-                    onClick={analyzeWithAI}
-                    id="analyze-btn"
-                    className="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg flex items-center justify-center gap-2 transition-transform transform hover:scale-105"
-                  >
-                    <svg
-                      className="w-6 h-6"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                      xmlns="http://www.w3.org/2000/svg"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth="2"
-                        d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
-                      ></path>
-                    </svg>
-                    Analisar com IA
-                  </button>
-                </div>
-                <div className="col-span-2 mt-2">
+              {/* Container dos botões de ação */}
+              <div className="md:col-span-2 mt-6 flex justify-around items-center gap-4">
+                {/* Botão Salvar */}
+                <div className="relative group">
                   <button
                     onClick={saveSettings}
                     id="save-btn"
-                    className="w-full bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg flex items-center justify-center gap-2 transition-colors"
+                    className="w-16 h-16 bg-gray-500 hover:bg-gray-600 text-white font-bold p-4 rounded-full flex items-center justify-center transition-colors"
                   >
                     <svg
-                      className="w-5 h-5"
+                      className="w-8 h-8"
                       fill="none"
                       stroke="currentColor"
                       viewBox="0 0 24 24"
@@ -807,8 +897,104 @@ export default function HomePage() {
                         d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"
                       ></path>
                     </svg>
-                    Salvar Configuração
                   </button>
+                  <div className="absolute bottom-full mb-2 w-32 bg-gray-700 text-white text-xs rounded py-1 px-2 text-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                    Salvar Configuração
+                  </div>
+                </div>
+
+                {/* Botão Upload */}
+                <div className="relative group">
+                  <label
+                    htmlFor="photo-upload"
+                    className="w-16 h-16 cursor-pointer bg-blue-600 hover:bg-blue-700 text-white font-bold p-4 rounded-full flex items-center justify-center transition-colors"
+                  >
+                    <svg
+                      className="w-8 h-8"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+                      ></path>
+                    </svg>
+                  </label>
+                  <div className="absolute bottom-full mb-2 w-32 bg-gray-700 text-white text-xs rounded py-1 px-2 text-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                    Enviar Foto
+                  </div>
+                </div>
+                <input
+                  id="photo-upload"
+                  type="file"
+                  className="hidden"
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => handleFiles(e.target.files)}
+                />
+
+                {/* Botão Câmera */}
+                <div className="relative group">
+                  <button
+                    onClick={startCamera}
+                    id="camera-btn"
+                    className="w-16 h-16 bg-green-600 hover:bg-green-700 text-white font-bold p-4 rounded-full flex items-center justify-center transition-colors"
+                  >
+                    <svg
+                      className="w-8 h-8"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"
+                      ></path>
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"
+                      ></path>
+                    </svg>
+                  </button>
+                  <div className="absolute bottom-full mb-2 w-32 bg-gray-700 text-white text-xs rounded py-1 px-2 text-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                    Tirar Foto
+                  </div>
+                </div>
+
+                {/* Botão Analisar com IA */}
+                <div className="relative group">
+                  <button
+                    onClick={analyzeWithAI}
+                    id="analyze-btn"
+                    className="w-16 h-16 bg-purple-600 hover:bg-purple-700 text-white font-bold p-4 rounded-full flex items-center justify-center transition-transform transform hover:scale-105"
+                  >
+                    <svg
+                      className="w-8 h-8"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
+                      ></path>
+                    </svg>
+                  </button>
+                  <div className="absolute bottom-full mb-2 w-32 bg-gray-700 text-white text-xs rounded py-1 px-2 text-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                    Analisar com IA
+                  </div>
                 </div>
               </div>
             </div>
@@ -819,10 +1005,13 @@ export default function HomePage() {
               Diagnóstico e Próximo Passo
             </h2>
             <div className="mb-4 text-sm">{initialSettings}</div>
-            <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
-              <div>{diagnosis}</div>
-            </div>
-            <div className="mt-6">{aiDiagnosis}</div>
+            {aiDiagnosis ? (
+              <div className="mt-6">{aiDiagnosis}</div>
+            ) : (
+              <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+                <div>{diagnosis}</div>
+              </div>
+            )}
           </section>
         </div>
 

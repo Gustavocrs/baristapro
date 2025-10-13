@@ -5,12 +5,13 @@ import {getFirestore} from "firebase/firestore";
 // A configuração do seu aplicativo da web do Firebase
 // ATENÇÃO: Substitua pelos dados do seu projeto!
 const firebaseConfig = {
-  apiKey: "SUA_API_KEY",
-  authDomain: "SEU_AUTH_DOMAIN",
-  projectId: "SEU_PROJECT_ID",
-  storageBucket: "SEU_STORAGE_BUCKET",
-  messagingSenderId: "SEU_MESSAGING_SENDER_ID",
-  appId: "SEU_APP_ID",
+  apiKey: "AIzaSyDQte0K1eSEbLiww_VRS2Nl8cmkEhM17Yk",
+  authDomain: "meuexpresso-5d31e.firebaseapp.com",
+  projectId: "meuexpresso-5d31e",
+  storageBucket: "meuexpresso-5d31e.firebasestorage.app",
+  messagingSenderId: "400791506963",
+  appId: "1:400791506963:web:fa20d9c9e5adeadbe86fe6",
+  measurementId: "G-2W56PW0S6Z",
 };
 
 // Checagem simples: se os placeholders não foram substituídos, não inicializamos
