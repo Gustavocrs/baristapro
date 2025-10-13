@@ -2,9 +2,7 @@ import {GoogleGenerativeAI} from "@google/generative-ai";
 import {NextResponse} from "next/server";
 
 export async function POST(request) {
-  const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY, {
-    apiVersion: "v1",
-  });
+  const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
   const model = genAI.getGenerativeModel({model: "gemini-2.5-flash-lite"});
 
   try {
@@ -12,7 +10,11 @@ export async function POST(request) {
 
     const textPrompt = `
       Você é um barista especialista em café expresso. Analise os seguintes dados e imagens de uma extração de café e forneça um diagnóstico e sugestões de ajuste.
-      Seja direto, técnico e amigável, como um especialista ajudando um amigo. Formate a resposta em HTML simples, usando <h3>, <ul>, <li> e <b> para destacar pontos importantes.
+      Seja direto, técnico e amigável.
+      A resposta DEVE ser em HTML. Use o formato <h3><strong>Título</strong></h3> para os títulos "Diagnóstico", "Sugestão Principal" e "Análise Detalhada".
+      Pule uma linha ao final de cada bloco e coloque em os titulos em uppercase.
+      Use <p> para os parágrafos de texto. Para a "Análise Detalhada", use uma lista <ul> com itens <li>.
+      Use <b> para destacar termos importantes. Não use markdown (###).
       Se houver imagens, relacione sua análise com o que você vê nelas (ex: cor da crema, uniformidade, etc.). Se não houver imagens, baseie-se apenas nos dados.
 
       Dados da Extração:
@@ -25,13 +27,13 @@ export async function POST(request) {
       - Sabor (1=Ácido, 2=Ideal, 3=Amargo): ${inputs.taste}
 
       Diagnóstico:
-      [Forneça um diagnóstico claro sobre o que provavelmente está acontecendo com a extração: sub-extraído, super-extraído, canalização, etc.]
+      [Diagnóstico claro: sub-extraído, super-extraído, etc.]
 
       Sugestão Principal:
-      [Indique a principal ação a ser tomada. Ex: "Moer mais fino para X clicks", "Ajustar a dose para Y gramas".]
+      [Ação principal a ser tomada. Ex: "Moer mais fino para X clicks".]
 
       Análise Detalhada:
-      [Explique o porquê da sua sugestão, conectando os dados. Ex: "O tempo de ${inputs.extractionTime}s é muito rápido, indicando que a água passou com pouca resistência. Moer mais fino aumentará a resistência e o tempo de contato."]
+      [Explicação detalhada do porquê da sugestão, conectando os dados.]
     `;
 
     // Constrói o prompt multimodal (texto + imagens)
@@ -45,9 +47,12 @@ export async function POST(request) {
 
     const result = await model.generateContent(promptParts);
     const response = result.response;
-    const text = response.text();
+    let text = response.text();
 
-    return NextResponse.json({analysis: text});
+    // Limpa o markdown que o modelo pode adicionar ao redor do HTML
+    text = text.replace(/^```html\s*/, "").replace(/\s*```$/, "");
+
+    return NextResponse.json({analysis: text.trim()});
   } catch (error) {
     console.error("Erro na API do Gemini:", error);
     return NextResponse.json(

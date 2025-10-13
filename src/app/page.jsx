@@ -553,7 +553,7 @@ export default function HomePage() {
 
       setAiDiagnosis(
         <div
-          className="p-4 border border-purple-300 dark:border-purple-700 rounded-lg"
+          className="ai-content p-4 border border-purple-300 dark:border-purple-700 rounded-lg"
           dangerouslySetInnerHTML={{__html: analysis}}
         />
       );
@@ -694,7 +694,7 @@ export default function HomePage() {
 
   return (
     <>
-      <div className="max-w-7xl mx-auto p-6">
+      <div className="w-screen p-6">
         {firebaseError && !firebaseError.includes("salvas no Firebase") && (
           <div className="mb-4 p-3 rounded-md bg-yellow-100 dark:bg-yellow-900/30 border border-yellow-300 dark:border-yellow-700 text-yellow-800 dark:text-yellow-200">
             <strong>Atenção:</strong> {firebaseError}
