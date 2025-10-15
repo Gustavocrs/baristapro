@@ -4,7 +4,7 @@ import {NextResponse} from "next/server";
 export async function POST(request) {
   try {
     const apiKey = process.env.GOOGLE_API_KEY;
-    console.log("🔍 GOOGLE_API_KEY:", apiKey ? "OK" : "❌ ausente");
+    // console.log("🔍 GOOGLE_API_KEY:", apiKey ? "OK" : "❌ ausente");
 
     if (!apiKey) {
       return NextResponse.json(
