@@ -5,7 +5,7 @@ import {getFirestore} from "firebase/firestore";
 // A configuração do seu aplicativo da web do Firebase
 // ATENÇÃO: Substitua pelos dados do seu projeto!
 const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  apiKey: process.env.FIREBASE_API_KEY,
   authDomain: "meuexpresso-5d31e.firebaseapp.com",
   projectId: "meuexpresso-5d31e",
   storageBucket: "meuexpresso-5d31e.firebasestorage.app",
