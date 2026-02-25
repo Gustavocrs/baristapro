@@ -726,7 +726,7 @@ const HomePage = () => {
             )}
           </section>
 
-          {/* Box 3: Telemetria & Diagnóstico */}
+          {/* Box 3: Telemetria & Diagnóstico.*/}
           <section className="p-6 bg-white rounded-2xl shadow-sm border border-neutral-200">
             <button 
               onClick={() => setIsTelemetryOpen(!isTelemetryOpen)}
