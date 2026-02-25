@@ -7,9 +7,16 @@
 import {GoogleGenerativeAI} from "@google/generative-ai";
 import {NextResponse} from "next/server";
 
+<<<<<<< HEAD
 export const POST = async (request) => {
   try {
     const apiKey = process.env.GOOGLE_API_KEY;
+=======
+export async function POST(request) {
+  try {
+    const apiKey = process.env.GOOGLE_API_KEY;
+    // console.log("🔍 GOOGLE_API_KEY:", apiKey ? "OK" : "❌ ausente");
+>>>>>>> 149af2cc9c1be95aff3bccbfdb0391aff14badd3
 
     if (!apiKey) {
       return NextResponse.json(
@@ -17,7 +24,11 @@ export const POST = async (request) => {
           error:
             "Chave de API ausente no servidor. Configure GOOGLE_API_KEY no .env.local.",
         },
+<<<<<<< HEAD
         {status: 500},
+=======
+        {status: 500}
+>>>>>>> 149af2cc9c1be95aff3bccbfdb0391aff14badd3
       );
     }
 
@@ -44,8 +55,15 @@ export const POST = async (request) => {
       Analise os seguintes dados e imagens de uma extração de café e forneça um diagnóstico técnico, direto e avançado.
       
       A resposta DEVE ser em HTML. Use o formato <h3><strong>Título</strong></h3> para os títulos "Diagnóstico", "Sugestão Principal" e "Análise Detalhada".
+<<<<<<< HEAD
       Pule uma linha ao final de cada bloco. Use <p> para os parágrafos de texto e <ul>/<li> para a análise detalhada.
       Use <b> para destaques. Não use markdown (###).
+=======
+      Pule uma linha ao final de cada bloco e coloque os títulos em uppercase.
+      Use <p> para os parágrafos de texto. Para a "Análise Detalhada", use uma lista <ul> com itens <li>.
+      Use <b> para destacar termos importantes. Não use markdown (###).
+      Se houver imagens, relacione sua análise com o que você vê nelas (ex: cor da crema, uniformidade, etc.). Se não houver imagens, baseie-se apenas nos dados.
+>>>>>>> 149af2cc9c1be95aff3bccbfdb0391aff14badd3
 
       SETUP DO USUÁRIO:
       - Máquina/Método Base: ${inputs.machine || "Não informado"}
@@ -85,17 +103,30 @@ export const POST = async (request) => {
     const promptParts = [{text: textPrompt}, ...formattedImageParts];
 
     const result = await model.generateContent(promptParts).catch((err) => {
+<<<<<<< HEAD
       console.error("❌ Erro na geração:", err);
+=======
+      console.error("❌ Erro na geração de conteúdo Gemini:", err);
+>>>>>>> 149af2cc9c1be95aff3bccbfdb0391aff14badd3
       throw err;
     });
 
     const response = result.response;
     let text = response.text();
+<<<<<<< HEAD
+=======
+
+>>>>>>> 149af2cc9c1be95aff3bccbfdb0391aff14badd3
     text = text.replace(/^```html\s*/i, "").replace(/\s*```$/i, "");
 
+    console.log("✅ Resposta do Gemini recebida com sucesso!");
     return NextResponse.json({analysis: text.trim()});
   } catch (error) {
+<<<<<<< HEAD
     console.error("❌ Erro na API:", error);
+=======
+    console.error("❌ Erro na API do Gemini:", error);
+>>>>>>> 149af2cc9c1be95aff3bccbfdb0391aff14badd3
     return NextResponse.json(
       {error: "Erro na análise. Verifique a chave de API e a conexão."},
       {status: 500},
