@@ -1,8 +1,7 @@
 /**
  * @file page.jsx
- * @description Root da aplicação. Orquestra autenticação, isolamento de DB por UID,
- * modais customizados, fluxo em Wizard, modo de visualização com cache de IA e edição de receitas.
- * Matriz sensorial expandida para leitura bidimensional de crema.
+ * @description Root da aplicação.
+ * Implementa visualização em lista com ícone de método em bloco visual (Flexbox) para melhor hierarquia.
  */
 
 "use client";
@@ -534,18 +533,22 @@ const HomePage = () => {
                     className="flex justify-between items-center bg-neutral-50 p-3 rounded-xl border border-neutral-100 group"
                   >
                     <div
-                      className="cursor-pointer flex-1"
+                      className="cursor-pointer flex-1 flex items-center gap-3"
                       onClick={() => viewRecipeCard(recipe)}
                     >
-                      <h4 className="font-bold text-neutral-800 text-sm group-hover:text-blue-600 transition-colors">
-                        {recipe.name}
-                      </h4>
-                      <p className="text-[10px] text-neutral-400 font-medium mt-0.5">
-                        {recipe.date} • {methodIcon}{" "}
-                        {setup?.name || "Desconhecido"} • Dose:{" "}
-                        {recipe.extraction.dose}g • Tempo:{" "}
-                        {recipe.extraction.extractionTime}s
-                      </p>
+                      <div className="flex items-center justify-center w-10 h-10 bg-white rounded-xl border border-neutral-200 shadow-sm text-lg shrink-0">
+                        {methodIcon}
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-neutral-800 text-sm group-hover:text-blue-600 transition-colors leading-tight">
+                          {recipe.name}
+                        </h4>
+                        <p className="text-[10px] text-neutral-400 font-medium mt-1">
+                          {recipe.date} • {setup?.name || "Desconhecido"} •
+                          Dose: {recipe.extraction.dose}g • Tempo:{" "}
+                          {recipe.extraction.extractionTime}s
+                        </p>
+                      </div>
                     </div>
                     <div className="flex gap-2 ml-4 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                       <button
