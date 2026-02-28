@@ -1,7 +1,7 @@
 /**
  * @file route.js
  * @description Rota de servidor para integração com Gemini AI.
- * Implementa Prompting Estrutural injetando marcação Tailwind diretamente na saída do LLM.
+ * Prompt estrutural Tailwind injetado, com suporte condicional de análise de Crema.
  */
 
 import {GoogleGenerativeAI} from "@google/generative-ai";
@@ -19,10 +19,7 @@ export const POST = async (request) => {
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
-
-    const model = genAI.getGenerativeModel({
-      model: process.env.GOOGLE_AI_MODEL,
-    });
+    const model = genAI.getGenerativeModel({model: "gemini-2.5-flash"});
 
     const {extraction, activeSetup, imageParts} = await request.json();
 
@@ -36,6 +33,11 @@ export const POST = async (request) => {
     const ratio =
       dose > 0 && cupYield > 0 ? (cupYield / dose).toFixed(1) : "N/A";
 
+    const cremaInfo =
+      activeSetup.method === "espresso" && extraction.sensory.crema
+        ? `- Aspecto Visual (Crema): ${extraction.sensory.crema}`
+        : "";
+
     const textPrompt = `
       Você é um Barista Campeão Mundial. Analise esta extração com rigor técnico.
 
@@ -43,7 +45,7 @@ export const POST = async (request) => {
       - Retorne APENAS código HTML válido. NADA DE TEXTO FORA DAS TAGS.
       - NÃO inicie com saudações (ex: "Olá", "Prezado").
       - NÃO use marcação Markdown (proibido usar ###, ** ou blocos \`\`\`html).
-      - Você DEVE seguir EXATAMENTE a estrutura de classes Tailwind CSS abaixo, apenas preenchendo os colchetes com sua análise:
+      - Siga EXATAMENTE a estrutura de classes Tailwind CSS abaixo:
 
       <div class="space-y-5">
         <div class="p-5 bg-red-50 border-l-4 border-red-500 rounded-r-2xl shadow-sm">
@@ -60,7 +62,7 @@ export const POST = async (request) => {
           <h3 class="text-neutral-800 font-black text-sm mb-3 uppercase tracking-wider flex items-center gap-2">🔬 Análise Detalhada</h3>
           <ul class="space-y-3">
             <li class="text-sm text-neutral-700 leading-relaxed border-b border-neutral-200 pb-3 last:border-0 last:pb-0">
-              <strong class="text-neutral-900 block mb-0.5">[Variável/Ponto de Análise]</strong> [Explicação técnica profunda]
+              <strong class="text-neutral-900 block mb-0.5">[Variável]</strong> [Explicação]
             </li>
           </ul>
         </div>
@@ -80,6 +82,7 @@ export const POST = async (request) => {
       - Acidez: ${extraction.sensory.acidity}
       - Amargor: ${extraction.sensory.bitterness}
       - Corpo: ${extraction.sensory.body}
+      ${cremaInfo}
     `;
 
     const formattedImageParts = (imageParts || []).map((part) => ({
@@ -106,10 +109,7 @@ export const POST = async (request) => {
   } catch (error) {
     console.error("❌ Erro na API:", error);
     return NextResponse.json(
-      {
-        error: "Erro na análise da IA.",
-        details: error instanceof Error ? error.message : String(error),
-      },
+      {error: "Erro na análise.", details: error.message},
       {status: 500},
     );
   }

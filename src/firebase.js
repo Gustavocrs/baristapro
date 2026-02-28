@@ -1,36 +1,41 @@
-// Importe as funções necessárias do SDK que você precisa
+/**
+ * @file firebase.js
+ * @description Inicialização do Firebase App, Firestore e Auth.
+ */
+
 import {initializeApp} from "firebase/app";
 import {getFirestore} from "firebase/firestore";
+import {getAuth, GoogleAuthProvider} from "firebase/auth";
 
-// A configuração do seu aplicativo da web do Firebase
-// ATENÇÃO: Substitua pelos dados do seu projeto!
 const firebaseConfig = {
-  apiKey: process.env.FIREBASE_API_KEY,
-  authDomain: "meuexpresso-5d31e.firebaseapp.com",
-  projectId: "meuexpresso-5d31e",
-  storageBucket: "meuexpresso-5d31e.firebasestorage.app",
-  messagingSenderId: "400791506963",
-  appId: "1:400791506963:web:fa20d9c9e5adeadbe86fe6",
-  measurementId: "G-2W56PW0S6Z",
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
 };
 
-// Checagem simples: se os placeholders não foram substituídos, não inicializamos
 const hasPlaceholder = Object.values(firebaseConfig).some(
   (v) =>
     typeof v === "string" &&
-    (v.includes("SUA_") || v.includes("SEU_") || v.trim() === "")
+    (v.includes("SUA_") || v.includes("SEU_") || v.trim() === ""),
 );
 
 let db = null;
+let auth = null;
+let googleProvider = null;
+
 if (hasPlaceholder) {
-  // Não inicializa; o app deve tratar db === null
   console.warn(
-    "Firebase não configurado (placeholders detectados). O Firestore não será inicializado."
+    "Firebase não configurado (placeholders detectados). Auth e Firestore offline.",
   );
 } else {
-  // Inicialize o Firebase e atribua o Firestore
   const app = initializeApp(firebaseConfig);
   db = getFirestore(app);
+  auth = getAuth(app);
+  googleProvider = new GoogleAuthProvider();
 }
 
-export {db};
+export {db, auth, googleProvider};

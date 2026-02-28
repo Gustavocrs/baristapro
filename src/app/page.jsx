@@ -1,6 +1,7 @@
 /**
  * @file page.jsx
- * @description Gerenciamento de setups, extração sensorial e persistência de receitas.
+ * @description Root da aplicação. Orquestra autenticação, isolamento de DB por UID,
+ * modais customizados e fluxo em Wizard para novas extrações.
  */
 
 "use client";
@@ -8,6 +9,8 @@
 import React, {useState, useEffect} from "react";
 import {db} from "../firebase";
 import {doc, getDoc, setDoc} from "firebase/firestore";
+import {useAuth} from "../hooks/useAuth";
+import Login from "../components/Login";
 
 const ACCESSORY_LIST = {
   espresso: [
@@ -27,6 +30,8 @@ const ACCESSORY_LIST = {
 };
 
 const HomePage = () => {
+  const {user, loading: authLoading, loginWithGoogle, logout} = useAuth();
+
   const [setups, setSetups] = useState([]);
   const [recipes, setRecipes] = useState([]);
   const [activeSetupId, setActiveSetupId] = useState("");
@@ -39,56 +44,80 @@ const HomePage = () => {
     accessories: [],
   });
 
+  // Estado de Wizard para Extração
+  const [isExtracting, setIsExtracting] = useState(false);
   const [extraction, setExtraction] = useState({
     dose: "",
     cupYield: "",
     clicks: "",
     extractionTime: "",
-    sensory: {acidity: "medium", bitterness: "medium", body: "medium"},
+    sensory: {
+      acidity: "medium",
+      bitterness: "medium",
+      body: "medium",
+      crema: "ideal",
+    },
   });
 
   const [aiDiagnosis, setAiDiagnosis] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isDbLoading, setIsDbLoading] = useState(true);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
+  // Controle de Modais Customizados
+  const [confirmModal, setConfirmModal] = useState({
+    isOpen: false,
+    title: "",
+    message: "",
+    onConfirm: null,
+  });
+  const [promptModal, setPromptModal] = useState({
+    isOpen: false,
+    title: "",
+    inputValue: "",
+    onConfirm: null,
+  });
+
+  const activeSetup = setups.find((s) => s.id === activeSetupId);
+
   const saveToFirebase = async (data) => {
-    if (!db) {
-      localStorage.setItem("barista_local_data", JSON.stringify(data));
-      return;
-    }
+    if (!db || !user) return;
     try {
-      await setDoc(doc(db, "users", "config_barista"), data);
+      await setDoc(doc(db, "users", user.uid), data);
     } catch (e) {
-      localStorage.setItem("barista_local_data", JSON.stringify(data));
+      console.error("Erro ao salvar no Firestore", e);
     }
   };
 
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      setIsDbLoading(false);
+      return;
+    }
+
     const loadData = async () => {
-      let data = null;
+      setIsDbLoading(true);
       if (db) {
         try {
-          const snap = await getDoc(doc(db, "users", "config_barista"));
-          if (snap.exists()) data = snap.data();
+          const snap = await getDoc(doc(db, "users", user.uid));
+          if (snap.exists()) {
+            const data = snap.data();
+            setSetups(data.setups || []);
+            setRecipes(data.recipes || []);
+            setActiveSetupId(data.activeSetupId || "");
+          } else {
+            setSetups([]);
+            setRecipes([]);
+            setActiveSetupId("");
+          }
         } catch (e) {
-          console.warn(
-            "Firebase bloqueado ou inacessível. Usando local storage.",
-          );
+          console.error("Erro de leitura.", e);
         }
       }
-      if (!data) {
-        const local = localStorage.getItem("barista_local_data");
-        if (local) data = JSON.parse(local);
-      }
-      if (data) {
-        setSetups(data.setups || []);
-        setRecipes(data.recipes || []);
-        setActiveSetupId(data.activeSetupId || "");
-      }
-      setIsLoading(false);
+      setIsDbLoading(false);
     };
     loadData();
-  }, []);
+  }, [user, authLoading]);
 
   const handleAddSetup = () => {
     if (!newSetup.name) return alert("Dê um nome ao seu setup.");
@@ -105,60 +134,74 @@ const HomePage = () => {
     saveToFirebase({setups: updatedSetups, recipes, activeSetupId});
   };
 
-  const removeSetup = (id) => {
-    const updated = setups.filter((s) => s.id !== id);
-    setSetups(updated);
-    const newActiveId = activeSetupId === id ? "" : activeSetupId;
-    setActiveSetupId(newActiveId);
-    saveToFirebase({setups: updated, recipes, activeSetupId: newActiveId});
+  const requestRemoveSetup = (id) => {
+    setConfirmModal({
+      isOpen: true,
+      title: "Excluir Setup",
+      message:
+        "Tem certeza que deseja remover este equipamento? As receitas associadas perderão a referência.",
+      onConfirm: () => {
+        const updated = setups.filter((s) => s.id !== id);
+        setSetups(updated);
+        const newActiveId = activeSetupId === id ? "" : activeSetupId;
+        setActiveSetupId(newActiveId);
+        saveToFirebase({setups: updated, recipes, activeSetupId: newActiveId});
+        setConfirmModal({isOpen: false});
+      },
+    });
   };
 
-  const handleSaveRecipe = () => {
-    if (!activeSetupId)
-      return alert("Selecione um setup antes de salvar a receita.");
+  const requestDeleteRecipe = (id) => {
+    setConfirmModal({
+      isOpen: true,
+      title: "Excluir Receita",
+      message: "Esta ação é irreversível. Confirmar exclusão?",
+      onConfirm: () => {
+        const updatedRecipes = recipes.filter((r) => r.id !== id);
+        setRecipes(updatedRecipes);
+        saveToFirebase({setups, recipes: updatedRecipes, activeSetupId});
+        setConfirmModal({isOpen: false});
+      },
+    });
+  };
 
-    const recipeName = prompt("Nome da Receita (Ex: Etiópia 15 clicks):");
-    if (!recipeName) return;
-
-    const newRecipe = {
-      id: Date.now().toString(),
-      name: recipeName,
-      setupId: activeSetupId,
-      extraction: {...extraction},
-      date: new Date().toLocaleDateString("pt-BR"),
-    };
-
-    const updatedRecipes = [newRecipe, ...recipes];
-    setRecipes(updatedRecipes);
-    saveToFirebase({setups, recipes: updatedRecipes, activeSetupId});
+  const requestSaveRecipe = () => {
+    setPromptModal({
+      isOpen: true,
+      title: "Nome da Receita (Ex: Etiópia 15 clicks)",
+      inputValue: "",
+      onConfirm: (val) => {
+        if (!val.trim()) return;
+        const newRecipe = {
+          id: Date.now().toString(),
+          name: val,
+          setupId: activeSetupId,
+          extraction: {...extraction},
+          date: new Date().toLocaleDateString("pt-BR"),
+        };
+        const updatedRecipes = [newRecipe, ...recipes];
+        setRecipes(updatedRecipes);
+        saveToFirebase({setups, recipes: updatedRecipes, activeSetupId});
+        setPromptModal({isOpen: false});
+        setIsExtracting(false);
+      },
+    });
   };
 
   const loadRecipe = (recipe) => {
     const setupExists = setups.find((s) => s.id === recipe.setupId);
     if (!setupExists) {
-      return alert(
-        "O setup associado a esta receita foi excluído. Crie um novo setup similar.",
-      );
+      return alert("O setup associado a esta receita foi excluído.");
     }
     setActiveSetupId(recipe.setupId);
     setExtraction(recipe.extraction);
-    saveToFirebase({setups, recipes, activeSetupId: recipe.setupId});
+    setIsExtracting(true);
+    setAiDiagnosis(null);
   };
-
-  const deleteRecipe = (id) => {
-    const updatedRecipes = recipes.filter((r) => r.id !== id);
-    setRecipes(updatedRecipes);
-    saveToFirebase({setups, recipes: updatedRecipes, activeSetupId});
-  };
-
-  const activeSetup = setups.find((s) => s.id === activeSetupId);
 
   const analyzeWithAI = async () => {
-    if (!activeSetup) return alert("Selecione um setup ativo.");
-
     setIsAnalyzing(true);
     setAiDiagnosis(null);
-
     try {
       const response = await fetch("/api/analyze", {
         method: "POST",
@@ -168,6 +211,7 @@ const HomePage = () => {
       const data = await response.json();
       if (data.error) throw new Error(data.error);
       setAiDiagnosis(data.analysis);
+      setIsExtracting(false); // Fecha o wizard para exibir o resultado
     } catch (e) {
       setAiDiagnosis(
         `<div class="p-4 bg-red-50 text-red-600 rounded-xl font-bold">Erro: ${e.message}</div>`,
@@ -177,26 +221,99 @@ const HomePage = () => {
     }
   };
 
-  if (isLoading)
+  if (authLoading || isDbLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-neutral-50 text-neutral-500 font-medium">
         Iniciando Laboratório...
       </div>
     );
+  }
+
+  if (!user) {
+    return <Login onLogin={loginWithGoogle} />;
+  }
 
   return (
     <div className="min-h-screen bg-neutral-50 pb-20">
+      {/* Modais Customizados */}
+      {confirmModal.isOpen && (
+        <div className="fixed inset-0 bg-neutral-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl animate-in zoom-in-95">
+            <h3 className="text-lg font-bold text-neutral-900 mb-2">
+              {confirmModal.title}
+            </h3>
+            <p className="text-sm text-neutral-600 mb-6">
+              {confirmModal.message}
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmModal({isOpen: false})}
+                className="flex-1 bg-neutral-100 text-neutral-700 py-3 rounded-xl font-bold text-sm"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmModal.onConfirm}
+                className="flex-1 bg-red-500 text-white py-3 rounded-xl font-bold text-sm shadow-md shadow-red-200"
+              >
+                Excluir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {promptModal.isOpen && (
+        <div className="fixed inset-0 bg-neutral-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl animate-in zoom-in-95">
+            <h3 className="text-sm font-bold text-neutral-900 mb-4">
+              {promptModal.title}
+            </h3>
+            <input
+              autoFocus
+              className="w-full p-3 bg-neutral-50 border border-neutral-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 mb-6"
+              value={promptModal.inputValue}
+              onChange={(e) =>
+                setPromptModal({...promptModal, inputValue: e.target.value})
+              }
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => setPromptModal({isOpen: false})}
+                className="flex-1 bg-neutral-100 text-neutral-700 py-3 rounded-xl font-bold text-sm"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => promptModal.onConfirm(promptModal.inputValue)}
+                className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-bold text-sm shadow-md shadow-blue-200"
+              >
+                Salvar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="max-w-2xl mx-auto px-4 py-8 space-y-6">
-        <header className="mb-8">
-          <h1 className="text-3xl font-black text-neutral-900 tracking-tighter">
-            BARISTA PRO
-          </h1>
-          <p className="text-neutral-500">
-            Gestão de Setup & Calibração Sensorial
-          </p>
+        <header className="flex justify-between items-center mb-8">
+          <div>
+            <h1 className="text-3xl font-black text-neutral-900 tracking-tighter">
+              BARISTA PRO
+            </h1>
+            <p className="text-xs text-neutral-500 font-medium bg-neutral-200 inline-block px-2 py-1 rounded mt-1">
+              {user.email}
+            </p>
+          </div>
+          <button
+            onClick={logout}
+            className="text-xs font-bold text-neutral-400 hover:text-red-500 transition-colors"
+          >
+            SAIR
+          </button>
         </header>
 
-        {/* SEÇÃO: MEUS SETUPS */}
+        {/* SETUP */}
         <section className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-lg font-bold text-neutral-800">
@@ -214,7 +331,7 @@ const HomePage = () => {
             <div className="bg-neutral-50 p-4 rounded-2xl mb-6 space-y-4 animate-in slide-in-from-top-2">
               <input
                 placeholder="Apelido (ex: Setup da Oster)"
-                className="w-full p-3 bg-white border rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full p-3 bg-white border border-neutral-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
                 value={newSetup.name}
                 onChange={(e) =>
                   setNewSetup({...newSetup, name: e.target.value})
@@ -222,7 +339,7 @@ const HomePage = () => {
               />
               <div className="grid grid-cols-2 gap-3">
                 <select
-                  className="p-3 bg-white border rounded-xl"
+                  className="p-3 bg-white border border-neutral-200 rounded-xl"
                   value={newSetup.method}
                   onChange={(e) =>
                     setNewSetup({
@@ -237,7 +354,7 @@ const HomePage = () => {
                 </select>
                 <input
                   placeholder="Máquina"
-                  className="p-3 bg-white border rounded-xl"
+                  className="p-3 bg-white border border-neutral-200 rounded-xl"
                   value={newSetup.machine}
                   onChange={(e) =>
                     setNewSetup({...newSetup, machine: e.target.value})
@@ -246,7 +363,7 @@ const HomePage = () => {
               </div>
               <input
                 placeholder="Moedor"
-                className="p-3 bg-white border rounded-xl w-full"
+                className="p-3 bg-white border border-neutral-200 rounded-xl w-full"
                 value={newSetup.grinder}
                 onChange={(e) =>
                   setNewSetup({...newSetup, grinder: e.target.value})
@@ -312,7 +429,7 @@ const HomePage = () => {
             </select>
             {activeSetupId && (
               <button
-                onClick={() => removeSetup(activeSetupId)}
+                onClick={() => requestRemoveSetup(activeSetupId)}
                 className="p-4 bg-red-50 text-red-500 rounded-2xl hover:bg-red-100 transition-colors"
               >
                 🗑️
@@ -321,61 +438,35 @@ const HomePage = () => {
           </div>
         </section>
 
-        {/* SEÇÃO: RECEITAS SALVAS */}
-        {recipes.length > 0 && (
-          <section className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200">
-            <h2 className="text-lg font-bold text-neutral-800 mb-4">
-              Minhas Receitas
-            </h2>
-            <div className="space-y-3 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
-              {recipes.map((recipe) => (
-                <div
-                  key={recipe.id}
-                  className="flex justify-between items-center bg-neutral-50 p-3 rounded-xl border border-neutral-100"
-                >
-                  <div
-                    className="cursor-pointer flex-1"
-                    onClick={() => loadRecipe(recipe)}
-                  >
-                    <h4 className="font-bold text-neutral-800 text-sm">
-                      {recipe.name}
-                    </h4>
-                    <p className="text-[10px] text-neutral-400 font-medium">
-                      {recipe.date} • Dose: {recipe.extraction.dose}g • Tempo:{" "}
-                      {recipe.extraction.extractionTime}s
-                    </p>
-                  </div>
-                  <div className="flex gap-2 ml-4">
-                    <button
-                      onClick={() => loadRecipe(recipe)}
-                      className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors"
-                    >
-                      USAR
-                    </button>
-                    <button
-                      onClick={() => deleteRecipe(recipe.id)}
-                      className="text-xs font-bold text-red-500 bg-red-50 px-3 py-1.5 rounded-lg hover:bg-red-100 transition-colors"
-                    >
-                      X
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
+        {/* WIZARD DE EXTRAÇÃO */}
+        {activeSetup && !isExtracting && (
+          <button
+            onClick={() => {
+              setAiDiagnosis(null);
+              setIsExtracting(true);
+            }}
+            className="w-full bg-neutral-900 text-white p-5 rounded-2xl font-black text-lg shadow-lg hover:bg-neutral-800 transition-all active:scale-95 flex items-center justify-center gap-3"
+          >
+            <span className="text-2xl">+</span> NOVA EXTRAÇÃO
+          </button>
         )}
 
-        {/* SEÇÃO: EXTRAÇÃO E MATRIZ SENSORIAL */}
-        {activeSetup && (
+        {activeSetup && isExtracting && (
           <section className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
             <div className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200">
               <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-bold">Parâmetros de Extração</h2>
+                <h2 className="text-lg font-bold">Configuração da Extração</h2>
+                <button
+                  onClick={() => setIsExtracting(false)}
+                  className="text-xs font-bold text-neutral-400"
+                >
+                  FECHAR
+                </button>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
                   <label className="text-[10px] font-black text-neutral-400 uppercase">
-                    Dose Entrada (g)
+                    Dose (g)
                   </label>
                   <input
                     type="number"
@@ -436,9 +527,9 @@ const HomePage = () => {
             </div>
 
             <div className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200">
-              <h2 className="text-lg font-bold mb-2">O que você sentiu?</h2>
+              <h2 className="text-lg font-bold mb-2">Avaliação Sensorial</h2>
               <p className="text-xs text-neutral-500 mb-6">
-                Seja honesto com seu paladar, a IA cuidará do resto.
+                Avalie o resultado final na xícara.
               </p>
 
               <div className="space-y-6">
@@ -446,20 +537,23 @@ const HomePage = () => {
                   {
                     key: "acidity",
                     label: "Acidez",
-                    desc: "Língua pinicando ou salivação intensa?",
+                    desc: "Azedo?",
                     colors: "bg-yellow-400",
+                    opts: ["BAIXA", "EQUILIBRADA", "ALTA"],
                   },
                   {
                     key: "bitterness",
                     label: "Amargor",
-                    desc: "Sensação de remédio ou café queimado?",
+                    desc: "Queimado?",
                     colors: "bg-orange-600",
+                    opts: ["BAIXA", "EQUILIBRADA", "ALTA"],
                   },
                   {
                     key: "body",
                     label: "Corpo",
-                    desc: "Textura: Chá ralo ou Leite cremoso?",
+                    desc: "Textura?",
                     colors: "bg-neutral-800",
+                    opts: ["RALO", "MÉDIO", "DENSO"],
                   },
                 ].map((sens) => (
                   <div key={sens.key} className="space-y-2">
@@ -472,7 +566,7 @@ const HomePage = () => {
                       </span>
                     </div>
                     <div className="flex gap-2">
-                      {["low", "medium", "high"].map((level) => (
+                      {["low", "medium", "high"].map((level, i) => (
                         <button
                           key={level}
                           onClick={() =>
@@ -490,24 +584,59 @@ const HomePage = () => {
                               : "bg-neutral-100 text-neutral-400"
                           }`}
                         >
-                          {level === "low"
-                            ? "BAIXA"
-                            : level === "medium"
-                              ? "EQUILIBRADA"
-                              : "ALTA"}
+                          {sens.opts[i]}
                         </button>
                       ))}
                     </div>
                   </div>
                 ))}
+
+                {/* Avaliação de Crema exclusiva para Espresso */}
+                {activeSetup.method === "espresso" && (
+                  <div className="space-y-2 pt-4 border-t border-neutral-100">
+                    <div className="flex justify-between items-end">
+                      <span className="font-bold text-amber-800">
+                        Crema Visual
+                      </span>
+                      <span className="text-[10px] text-amber-600/60 uppercase">
+                        Aspecto?
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {[
+                        {val: "pale", label: "Pálida/Rala"},
+                        {val: "ideal", label: "Avelã Densa"},
+                        {val: "dark", label: "Muito Escura"},
+                        {val: "bubbly", label: "Bolhas Grandes"},
+                      ].map((c) => (
+                        <button
+                          key={c.val}
+                          onClick={() =>
+                            setExtraction({
+                              ...extraction,
+                              sensory: {...extraction.sensory, crema: c.val},
+                            })
+                          }
+                          className={`py-3 rounded-xl text-xs font-black transition-all ${
+                            extraction.sensory.crema === c.val
+                              ? `bg-amber-600 text-white shadow-md`
+                              : "bg-amber-50 text-amber-700/50"
+                          }`}
+                        >
+                          {c.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="mt-8 flex gap-3">
                 <button
-                  onClick={handleSaveRecipe}
-                  className="flex-1 bg-green-100 text-green-700 p-4 rounded-2xl font-black text-sm shadow-sm hover:bg-green-200 active:scale-95 transition-all"
+                  onClick={requestSaveRecipe}
+                  className="flex-1 bg-green-100 text-green-700 p-4 rounded-2xl font-black text-sm shadow-sm hover:bg-green-200 active:scale-95 transition-all flex flex-col items-center justify-center gap-1"
                 >
-                  💾 SALVAR RECEITA
+                  <span className="text-lg leading-none">💾</span> SALVAR
                 </button>
                 <button
                   onClick={analyzeWithAI}
@@ -518,7 +647,6 @@ const HomePage = () => {
                     <>
                       <svg
                         className="animate-spin h-5 w-5 text-white"
-                        xmlns="http://www.w3.org/2000/svg"
                         fill="none"
                         viewBox="0 0 24 24"
                       >
@@ -539,7 +667,7 @@ const HomePage = () => {
                       ANALISANDO...
                     </>
                   ) : (
-                    "🪄 ANALISAR EXTRAÇÃO"
+                    "🪄 GERAR LAUDO"
                   )}
                 </button>
               </div>
@@ -547,16 +675,68 @@ const HomePage = () => {
           </section>
         )}
 
-        {/* ÁREA DE DIAGNÓSTICO ESTILIZADA */}
+        {/* RECEITAS */}
+        {!isExtracting && recipes.length > 0 && (
+          <section className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200">
+            <h2 className="text-lg font-bold text-neutral-800 mb-4">
+              Minhas Receitas
+            </h2>
+            <div className="space-y-3 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
+              {recipes.map((recipe) => (
+                <div
+                  key={recipe.id}
+                  className="flex justify-between items-center bg-neutral-50 p-3 rounded-xl border border-neutral-100"
+                >
+                  <div
+                    className="cursor-pointer flex-1"
+                    onClick={() => loadRecipe(recipe)}
+                  >
+                    <h4 className="font-bold text-neutral-800 text-sm">
+                      {recipe.name}
+                    </h4>
+                    <p className="text-[10px] text-neutral-400 font-medium mt-0.5">
+                      {recipe.date} • Dose: {recipe.extraction.dose}g • Tempo:{" "}
+                      {recipe.extraction.extractionTime}s
+                    </p>
+                  </div>
+                  <div className="flex gap-2 ml-4">
+                    <button
+                      onClick={() => loadRecipe(recipe)}
+                      className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-2 rounded-lg hover:bg-blue-100 transition-colors"
+                    >
+                      USAR
+                    </button>
+                    <button
+                      onClick={() => requestDeleteRecipe(recipe.id)}
+                      className="text-xs font-bold text-red-500 bg-red-50 px-3 py-2 rounded-lg hover:bg-red-100 transition-colors"
+                    >
+                      X
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* LAUDO IA */}
         {aiDiagnosis && !isAnalyzing && (
-          <div className="bg-white rounded-3xl p-6 sm:p-8 border border-neutral-200 shadow-xl animate-in fade-in slide-in-from-bottom-8 duration-500 mt-8">
-            <h3 className="text-xl font-black mb-6 flex items-center gap-3 text-neutral-800 border-b border-neutral-100 pb-4">
-              <span className="bg-purple-100 text-xl p-2.5 rounded-xl shadow-sm">
-                🤖
-              </span>{" "}
-              Laudo do Barista AI
-            </h3>
-            {/* O wrapper não usa 'prose' para não sobrescrever o Tailwind gerado pela IA */}
+          <div className="bg-white rounded-3xl p-6 sm:p-8 border border-neutral-200 shadow-xl animate-in fade-in slide-in-from-bottom-8 duration-500 mt-8 relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-purple-500 to-blue-500"></div>
+            <div className="flex justify-between items-start mb-6 border-b border-neutral-100 pb-4">
+              <h3 className="text-xl font-black flex items-center gap-3 text-neutral-800">
+                <span className="bg-purple-100 text-xl p-2.5 rounded-xl shadow-sm">
+                  🤖
+                </span>{" "}
+                Laudo IA
+              </h3>
+              <button
+                onClick={() => setAiDiagnosis(null)}
+                className="text-xs font-bold text-neutral-400 bg-neutral-100 px-3 py-1.5 rounded-lg"
+              >
+                FECHAR
+              </button>
+            </div>
             <div
               className="w-full"
               dangerouslySetInnerHTML={{__html: aiDiagnosis}}
