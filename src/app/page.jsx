@@ -1,7 +1,7 @@
 /**
  * @file page.jsx
  * @description Root da aplicação. Orquestra autenticação, isolamento de DB por UID,
- * modais customizados e fluxo em Wizard para novas extrações.
+ * modais customizados, fluxo em Wizard, modo de visualização e edição de receitas.
  */
 
 "use client";
@@ -29,6 +29,22 @@ const ACCESSORY_LIST = {
   geral: ["Balança de Precisão", "RDT (Borrifador)", "Termômetro"],
 };
 
+// Helper de tradução para o modo Read-Only
+const translateSensory = (key, value) => {
+  const map = {
+    acidity: {low: "BAIXA", medium: "EQUILIBRADA", high: "ALTA"},
+    bitterness: {low: "BAIXA", medium: "EQUILIBRADA", high: "ALTA"},
+    body: {low: "RALO", medium: "MÉDIO", high: "DENSO"},
+    crema: {
+      pale: "PÁLIDA/RALA",
+      ideal: "AVELÃ DENSA",
+      dark: "MUITO ESCURA",
+      bubbly: "BOLHAS GRANDES",
+    },
+  };
+  return map[key]?.[value] || value;
+};
+
 const HomePage = () => {
   const {user, loading: authLoading, loginWithGoogle, logout} = useAuth();
 
@@ -44,8 +60,12 @@ const HomePage = () => {
     accessories: [],
   });
 
-  // Estado de Wizard para Extração
+  // Estados de Navegação e Fluxo
   const [isExtracting, setIsExtracting] = useState(false);
+  const [viewingRecipe, setViewingRecipe] = useState(null);
+  const [editingRecipeId, setEditingRecipeId] = useState(null);
+
+  // Estado de Dados da Extração
   const [extraction, setExtraction] = useState({
     dose: "",
     cupYield: "",
@@ -63,7 +83,6 @@ const HomePage = () => {
   const [isDbLoading, setIsDbLoading] = useState(true);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-  // Controle de Modais Customizados
   const [confirmModal, setConfirmModal] = useState({
     isOpen: false,
     title: "",
@@ -119,6 +138,14 @@ const HomePage = () => {
     loadData();
   }, [user, authLoading]);
 
+  // RESET NAVIGATION
+  const resetToHome = () => {
+    setIsExtracting(false);
+    setViewingRecipe(null);
+    setEditingRecipeId(null);
+    setAiDiagnosis(null);
+  };
+
   const handleAddSetup = () => {
     if (!newSetup.name) return alert("Dê um nome ao seu setup.");
     const updatedSetups = [...setups, {...newSetup, id: Date.now().toString()}];
@@ -159,6 +186,7 @@ const HomePage = () => {
       onConfirm: () => {
         const updatedRecipes = recipes.filter((r) => r.id !== id);
         setRecipes(updatedRecipes);
+        if (viewingRecipe?.id === id) resetToHome();
         saveToFirebase({setups, recipes: updatedRecipes, activeSetupId});
         setConfirmModal({isOpen: false});
       },
@@ -166,37 +194,96 @@ const HomePage = () => {
   };
 
   const requestSaveRecipe = () => {
+    const existingRecipe = recipes.find((r) => r.id === editingRecipeId);
+
     setPromptModal({
       isOpen: true,
-      title: "Nome da Receita (Ex: Etiópia 15 clicks)",
-      inputValue: "",
+      title: editingRecipeId
+        ? "Atualizar Nome da Receita"
+        : "Nome da Nova Receita",
+      inputValue: existingRecipe ? existingRecipe.name : "",
       onConfirm: (val) => {
         if (!val.trim()) return;
-        const newRecipe = {
-          id: Date.now().toString(),
-          name: val,
-          setupId: activeSetupId,
-          extraction: {...extraction},
-          date: new Date().toLocaleDateString("pt-BR"),
-        };
-        const updatedRecipes = [newRecipe, ...recipes];
+
+        let updatedRecipes;
+        if (editingRecipeId) {
+          // UPDATE
+          updatedRecipes = recipes.map((r) =>
+            r.id === editingRecipeId
+              ? {...r, name: val, extraction: {...extraction}}
+              : r,
+          );
+        } else {
+          // INSERT
+          const newRecipe = {
+            id: Date.now().toString(),
+            name: val,
+            setupId: activeSetupId,
+            extraction: {...extraction},
+            date: new Date().toLocaleDateString("pt-BR"),
+          };
+          updatedRecipes = [newRecipe, ...recipes];
+        }
+
         setRecipes(updatedRecipes);
         saveToFirebase({setups, recipes: updatedRecipes, activeSetupId});
         setPromptModal({isOpen: false});
-        setIsExtracting(false);
+        resetToHome();
       },
     });
   };
 
-  const loadRecipe = (recipe) => {
+  // NAVEGAÇÃO DE RECEITAS
+  const viewRecipeCard = (recipe) => {
+    setViewingRecipe(recipe);
+    setIsExtracting(false);
+    setEditingRecipeId(null);
+    setAiDiagnosis(null);
+  };
+
+  const editRecipe = (recipe) => {
     const setupExists = setups.find((s) => s.id === recipe.setupId);
-    if (!setupExists) {
+    if (!setupExists)
       return alert("O setup associado a esta receita foi excluído.");
-    }
+
     setActiveSetupId(recipe.setupId);
     setExtraction(recipe.extraction);
+    setEditingRecipeId(recipe.id);
+    setViewingRecipe(null);
     setIsExtracting(true);
     setAiDiagnosis(null);
+  };
+
+  const useRecipeAsBase = (recipe) => {
+    const setupExists = setups.find((s) => s.id === recipe.setupId);
+    if (!setupExists)
+      return alert("O setup associado a esta receita foi excluído.");
+
+    setActiveSetupId(recipe.setupId);
+    setExtraction(recipe.extraction);
+    setEditingRecipeId(null); // Cria como nova
+    setViewingRecipe(null);
+    setIsExtracting(true);
+    setAiDiagnosis(null);
+  };
+
+  const startNewExtraction = () => {
+    setExtraction({
+      dose: "",
+      cupYield: "",
+      clicks: "",
+      extractionTime: "",
+      sensory: {
+        acidity: "medium",
+        bitterness: "medium",
+        body: "medium",
+        crema: "ideal",
+      },
+    });
+    setEditingRecipeId(null);
+    setViewingRecipe(null);
+    setAiDiagnosis(null);
+    setIsExtracting(true);
   };
 
   const analyzeWithAI = async () => {
@@ -211,7 +298,8 @@ const HomePage = () => {
       const data = await response.json();
       if (data.error) throw new Error(data.error);
       setAiDiagnosis(data.analysis);
-      setIsExtracting(false); // Fecha o wizard para exibir o resultado
+      setIsExtracting(false);
+      setViewingRecipe(null);
     } catch (e) {
       setAiDiagnosis(
         `<div class="p-4 bg-red-50 text-red-600 rounded-xl font-bold">Erro: ${e.message}</div>`,
@@ -256,7 +344,7 @@ const HomePage = () => {
                 onClick={confirmModal.onConfirm}
                 className="flex-1 bg-red-500 text-white py-3 rounded-xl font-bold text-sm shadow-md shadow-red-200"
               >
-                Excluir
+                Confirmar
               </button>
             </div>
           </div>
@@ -297,8 +385,8 @@ const HomePage = () => {
 
       <div className="max-w-2xl mx-auto px-4 py-8 space-y-6">
         <header className="flex justify-between items-center mb-8">
-          <div>
-            <h1 className="text-3xl font-black text-neutral-900 tracking-tighter">
+          <div onClick={resetToHome} className="cursor-pointer group">
+            <h1 className="text-3xl font-black text-neutral-900 tracking-tighter group-hover:text-blue-600 transition-colors">
               BARISTA PRO
             </h1>
             <p className="text-xs text-neutral-500 font-medium bg-neutral-200 inline-block px-2 py-1 rounded mt-1">
@@ -313,139 +401,138 @@ const HomePage = () => {
           </button>
         </header>
 
-        {/* SETUP */}
-        <section className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200">
-          <div className="flex justify-between items-center mb-6">
-            <h2 className="text-lg font-bold text-neutral-800">
-              Meus Equipamentos
-            </h2>
-            <button
-              onClick={() => setIsAddingSetup(!isAddingSetup)}
-              className="bg-neutral-900 text-white text-xs px-4 py-2 rounded-full font-bold hover:bg-blue-600 transition-colors"
-            >
-              {isAddingSetup ? "FECHAR" : "ADICIONAR"}
-            </button>
-          </div>
-
-          {isAddingSetup && (
-            <div className="bg-neutral-50 p-4 rounded-2xl mb-6 space-y-4 animate-in slide-in-from-top-2">
-              <input
-                placeholder="Apelido (ex: Setup da Oster)"
-                className="w-full p-3 bg-white border border-neutral-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
-                value={newSetup.name}
-                onChange={(e) =>
-                  setNewSetup({...newSetup, name: e.target.value})
-                }
-              />
-              <div className="grid grid-cols-2 gap-3">
-                <select
-                  className="p-3 bg-white border border-neutral-200 rounded-xl"
-                  value={newSetup.method}
-                  onChange={(e) =>
-                    setNewSetup({
-                      ...newSetup,
-                      method: e.target.value,
-                      accessories: [],
-                    })
-                  }
-                >
-                  <option value="espresso">Expresso</option>
-                  <option value="coado">Coado / Filtro</option>
-                </select>
-                <input
-                  placeholder="Máquina"
-                  className="p-3 bg-white border border-neutral-200 rounded-xl"
-                  value={newSetup.machine}
-                  onChange={(e) =>
-                    setNewSetup({...newSetup, machine: e.target.value})
-                  }
-                />
-              </div>
-              <input
-                placeholder="Moedor"
-                className="p-3 bg-white border border-neutral-200 rounded-xl w-full"
-                value={newSetup.grinder}
-                onChange={(e) =>
-                  setNewSetup({...newSetup, grinder: e.target.value})
-                }
-              />
-
-              <div className="space-y-2">
-                <p className="text-xs font-bold text-neutral-400 uppercase">
-                  Acessórios para {newSetup.method}
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {[
-                    ...ACCESSORY_LIST[newSetup.method],
-                    ...ACCESSORY_LIST.geral,
-                  ].map((acc) => (
-                    <label
-                      key={acc}
-                      className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-full border text-sm cursor-pointer hover:border-blue-500"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={newSetup.accessories.includes(acc)}
-                        onChange={(e) => {
-                          const list = e.target.checked
-                            ? [...newSetup.accessories, acc]
-                            : newSetup.accessories.filter((a) => a !== acc);
-                          setNewSetup({...newSetup, accessories: list});
-                        }}
-                      />{" "}
-                      {acc}
-                    </label>
-                  ))}
-                </div>
-              </div>
+        {/* SETUP (Oculto se visualizando ou extraindo) */}
+        {!isExtracting && !viewingRecipe && (
+          <section className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200 animate-in fade-in">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-lg font-bold text-neutral-800">
+                Meus Equipamentos
+              </h2>
               <button
-                onClick={handleAddSetup}
-                className="w-full bg-blue-600 text-white p-4 rounded-xl font-bold shadow-lg shadow-blue-100"
+                onClick={() => setIsAddingSetup(!isAddingSetup)}
+                className="bg-neutral-900 text-white text-xs px-4 py-2 rounded-full font-bold hover:bg-blue-600 transition-colors"
               >
-                SALVAR SETUP
+                {isAddingSetup ? "FECHAR" : "ADICIONAR"}
               </button>
             </div>
-          )}
 
-          <div className="flex gap-2">
-            <select
-              value={activeSetupId}
-              onChange={(e) => {
-                setActiveSetupId(e.target.value);
-                saveToFirebase({
-                  setups,
-                  recipes,
-                  activeSetupId: e.target.value,
-                });
-              }}
-              className="flex-1 p-4 bg-neutral-100 border-none rounded-2xl font-bold text-neutral-700 outline-none ring-2 ring-transparent focus:ring-blue-500"
-            >
-              <option value="">Selecione um Perfil...</option>
-              {setups.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} ({s.method === "espresso" ? "☕" : "💧"})
-                </option>
-              ))}
-            </select>
-            {activeSetupId && (
-              <button
-                onClick={() => requestRemoveSetup(activeSetupId)}
-                className="p-4 bg-red-50 text-red-500 rounded-2xl hover:bg-red-100 transition-colors"
-              >
-                🗑️
-              </button>
+            {isAddingSetup && (
+              <div className="bg-neutral-50 p-4 rounded-2xl mb-6 space-y-4 animate-in slide-in-from-top-2">
+                <input
+                  placeholder="Apelido (ex: Setup da Oster)"
+                  className="w-full p-3 bg-white border border-neutral-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+                  value={newSetup.name}
+                  onChange={(e) =>
+                    setNewSetup({...newSetup, name: e.target.value})
+                  }
+                />
+                <div className="grid grid-cols-2 gap-3">
+                  <select
+                    className="p-3 bg-white border border-neutral-200 rounded-xl"
+                    value={newSetup.method}
+                    onChange={(e) =>
+                      setNewSetup({
+                        ...newSetup,
+                        method: e.target.value,
+                        accessories: [],
+                      })
+                    }
+                  >
+                    <option value="espresso">Expresso</option>
+                    <option value="coado">Coado / Filtro</option>
+                  </select>
+                  <input
+                    placeholder="Máquina"
+                    className="p-3 bg-white border border-neutral-200 rounded-xl"
+                    value={newSetup.machine}
+                    onChange={(e) =>
+                      setNewSetup({...newSetup, machine: e.target.value})
+                    }
+                  />
+                </div>
+                <input
+                  placeholder="Moedor"
+                  className="p-3 bg-white border border-neutral-200 rounded-xl w-full"
+                  value={newSetup.grinder}
+                  onChange={(e) =>
+                    setNewSetup({...newSetup, grinder: e.target.value})
+                  }
+                />
+
+                <div className="space-y-2">
+                  <p className="text-xs font-bold text-neutral-400 uppercase">
+                    Acessórios para {newSetup.method}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      ...ACCESSORY_LIST[newSetup.method],
+                      ...ACCESSORY_LIST.geral,
+                    ].map((acc) => (
+                      <label
+                        key={acc}
+                        className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-full border text-sm cursor-pointer hover:border-blue-500"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={newSetup.accessories.includes(acc)}
+                          onChange={(e) => {
+                            const list = e.target.checked
+                              ? [...newSetup.accessories, acc]
+                              : newSetup.accessories.filter((a) => a !== acc);
+                            setNewSetup({...newSetup, accessories: list});
+                          }}
+                        />{" "}
+                        {acc}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <button
+                  onClick={handleAddSetup}
+                  className="w-full bg-blue-600 text-white p-4 rounded-xl font-bold shadow-lg shadow-blue-100"
+                >
+                  SALVAR SETUP
+                </button>
+              </div>
             )}
-          </div>
-        </section>
 
-        {/* WIZARD DE EXTRAÇÃO */}
-        {activeSetup && !isExtracting && (
+            <div className="flex gap-2">
+              <select
+                value={activeSetupId}
+                onChange={(e) => {
+                  setActiveSetupId(e.target.value);
+                  saveToFirebase({
+                    setups,
+                    recipes,
+                    activeSetupId: e.target.value,
+                  });
+                }}
+                className="flex-1 p-4 bg-neutral-100 border-none rounded-2xl font-bold text-neutral-700 outline-none ring-2 ring-transparent focus:ring-blue-500"
+              >
+                <option value="">Selecione um Perfil...</option>
+                {setups.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.method === "espresso" ? "☕" : "💧"})
+                  </option>
+                ))}
+              </select>
+              {activeSetupId && (
+                <button
+                  onClick={() => requestRemoveSetup(activeSetupId)}
+                  className="p-4 bg-red-50 text-red-500 rounded-2xl hover:bg-red-100 transition-colors"
+                >
+                  🗑️
+                </button>
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* WIZARD DE EXTRAÇÃO (Edição/Criação) */}
+        {activeSetup && !isExtracting && !viewingRecipe && (
           <button
-            onClick={() => {
-              setAiDiagnosis(null);
-              setIsExtracting(true);
-            }}
-            className="w-full bg-neutral-900 text-white p-5 rounded-2xl font-black text-lg shadow-lg hover:bg-neutral-800 transition-all active:scale-95 flex items-center justify-center gap-3"
+            onClick={startNewExtraction}
+            className="w-full bg-neutral-900 text-white p-5 rounded-2xl font-black text-lg shadow-lg hover:bg-neutral-800 transition-all active:scale-95 flex items-center justify-center gap-3 animate-in fade-in"
           >
             <span className="text-2xl">+</span> NOVA EXTRAÇÃO
           </button>
@@ -455,10 +542,14 @@ const HomePage = () => {
           <section className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
             <div className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200">
               <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-bold">Configuração da Extração</h2>
+                <h2 className="text-lg font-bold">
+                  {editingRecipeId
+                    ? "Editando Configuração"
+                    : "Configuração da Extração"}
+                </h2>
                 <button
-                  onClick={() => setIsExtracting(false)}
-                  className="text-xs font-bold text-neutral-400"
+                  onClick={resetToHome}
+                  className="text-xs font-bold text-neutral-400 hover:text-neutral-600"
                 >
                   FECHAR
                 </button>
@@ -580,7 +671,7 @@ const HomePage = () => {
                           }
                           className={`flex-1 py-3 rounded-xl text-xs font-black transition-all ${
                             extraction.sensory[sens.key] === level
-                              ? `${sens.colors} text-white scale-105 shadow-md`
+                              ? `${sens.colors} text-white shadow-md`
                               : "bg-neutral-100 text-neutral-400"
                           }`}
                         >
@@ -591,7 +682,6 @@ const HomePage = () => {
                   </div>
                 ))}
 
-                {/* Avaliação de Crema exclusiva para Espresso */}
                 {activeSetup.method === "espresso" && (
                   <div className="space-y-2 pt-4 border-t border-neutral-100">
                     <div className="flex justify-between items-end">
@@ -675,9 +765,168 @@ const HomePage = () => {
           </section>
         )}
 
-        {/* RECEITAS */}
-        {!isExtracting && recipes.length > 0 && (
-          <section className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200">
+        {/* READ-ONLY CARD DA RECEITA (Exibe os dados de forma limpa) */}
+        {viewingRecipe && (
+          <section className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200 animate-in fade-in slide-in-from-bottom-4">
+            <div className="flex justify-between items-start mb-6 border-b border-neutral-100 pb-4">
+              <div>
+                <h2 className="text-xl font-black text-neutral-800">
+                  {viewingRecipe.name}
+                </h2>
+                <p className="text-xs text-neutral-500 mt-1 font-medium">
+                  {viewingRecipe.date} •{" "}
+                  {setups.find((s) => s.id === viewingRecipe.setupId)?.name ||
+                    "Setup Desconhecido"}
+                </p>
+              </div>
+              <button
+                onClick={resetToHome}
+                className="text-[10px] font-bold text-neutral-400 bg-neutral-100 px-3 py-2 rounded-lg hover:bg-neutral-200 transition-colors"
+              >
+                FECHAR
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mb-6">
+              <div className="p-3 bg-neutral-50 rounded-xl border border-neutral-100">
+                <p className="text-[10px] font-black text-neutral-400 uppercase">
+                  Dose
+                </p>
+                <p className="font-bold text-neutral-900">
+                  {viewingRecipe.extraction.dose}g
+                </p>
+              </div>
+              <div className="p-3 bg-neutral-50 rounded-xl border border-neutral-100">
+                <p className="text-[10px] font-black text-neutral-400 uppercase">
+                  Rendimento
+                </p>
+                <p className="font-bold text-neutral-900">
+                  {viewingRecipe.extraction.cupYield}g
+                </p>
+              </div>
+              <div className="p-3 bg-neutral-50 rounded-xl border border-neutral-100">
+                <p className="text-[10px] font-black text-neutral-400 uppercase">
+                  Moagem
+                </p>
+                <p className="font-bold text-neutral-900">
+                  {viewingRecipe.extraction.clicks} clks
+                </p>
+              </div>
+              <div className="p-3 bg-neutral-50 rounded-xl border border-neutral-100">
+                <p className="text-[10px] font-black text-neutral-400 uppercase">
+                  Tempo
+                </p>
+                <p className="font-bold text-neutral-900">
+                  {viewingRecipe.extraction.extractionTime}s
+                </p>
+              </div>
+            </div>
+
+            <h3 className="text-sm font-bold text-neutral-800 mb-3">
+              Matriz Sensorial
+            </h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              <div className="px-3 py-2 bg-yellow-50 rounded-lg">
+                <p className="text-[10px] text-yellow-600 font-bold uppercase">
+                  Acidez
+                </p>
+                <p className="text-xs font-black text-yellow-800">
+                  {translateSensory(
+                    "acidity",
+                    viewingRecipe.extraction.sensory.acidity,
+                  )}
+                </p>
+              </div>
+              <div className="px-3 py-2 bg-orange-50 rounded-lg">
+                <p className="text-[10px] text-orange-600 font-bold uppercase">
+                  Amargor
+                </p>
+                <p className="text-xs font-black text-orange-800">
+                  {translateSensory(
+                    "bitterness",
+                    viewingRecipe.extraction.sensory.bitterness,
+                  )}
+                </p>
+              </div>
+              <div className="px-3 py-2 bg-neutral-100 rounded-lg">
+                <p className="text-[10px] text-neutral-500 font-bold uppercase">
+                  Corpo
+                </p>
+                <p className="text-xs font-black text-neutral-800">
+                  {translateSensory(
+                    "body",
+                    viewingRecipe.extraction.sensory.body,
+                  )}
+                </p>
+              </div>
+              {viewingRecipe.extraction.sensory.crema && (
+                <div className="px-3 py-2 bg-amber-50 rounded-lg">
+                  <p className="text-[10px] text-amber-600 font-bold uppercase">
+                    Crema
+                  </p>
+                  <p className="text-xs font-black text-amber-800">
+                    {translateSensory(
+                      "crema",
+                      viewingRecipe.extraction.sensory.crema,
+                    )}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-8 grid grid-cols-2 gap-3">
+              {/* <button
+                onClick={() => useRecipeAsBase(viewingRecipe)}
+                className="bg-blue-600 text-white p-4 rounded-xl font-bold text-sm shadow-md hover:bg-blue-700 transition-colors"
+              >
+                USAR COMO BASE
+              </button> */}
+
+              <button
+                onClick={analyzeWithAI}
+                disabled={isAnalyzing}
+                className="flex-[2] bg-gradient-to-r from-purple-600 to-blue-600 text-white p-4 rounded-2xl font-black text-sm shadow-xl shadow-blue-100 flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-70 disabled:scale-100"
+              >
+                {isAnalyzing ? (
+                  <>
+                    <svg
+                      className="animate-spin h-5 w-5 text-white"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      ></circle>
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      ></path>
+                    </svg>
+                    ANALISANDO...
+                  </>
+                ) : (
+                  "🪄 GERAR LAUDO"
+                )}
+              </button>
+              <button
+                onClick={() => editRecipe(viewingRecipe)}
+                className="bg-neutral-100 text-neutral-800 p-4 rounded-xl font-bold text-sm hover:bg-neutral-200 transition-colors"
+              >
+                EDITAR RECEITA
+              </button>
+            </div>
+          </section>
+        )}
+
+        {/* LISTA DE RECEITAS (Oculta se extraindo ou visualizando) */}
+        {!isExtracting && !viewingRecipe && recipes.length > 0 && (
+          <section className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200 animate-in fade-in">
             <h2 className="text-lg font-bold text-neutral-800 mb-4">
               Minhas Receitas
             </h2>
@@ -685,13 +934,13 @@ const HomePage = () => {
               {recipes.map((recipe) => (
                 <div
                   key={recipe.id}
-                  className="flex justify-between items-center bg-neutral-50 p-3 rounded-xl border border-neutral-100"
+                  className="flex justify-between items-center bg-neutral-50 p-3 rounded-xl border border-neutral-100 group"
                 >
                   <div
                     className="cursor-pointer flex-1"
-                    onClick={() => loadRecipe(recipe)}
+                    onClick={() => viewRecipeCard(recipe)}
                   >
-                    <h4 className="font-bold text-neutral-800 text-sm">
+                    <h4 className="font-bold text-neutral-800 text-sm group-hover:text-blue-600 transition-colors">
                       {recipe.name}
                     </h4>
                     <p className="text-[10px] text-neutral-400 font-medium mt-0.5">
@@ -699,16 +948,22 @@ const HomePage = () => {
                       {recipe.extraction.extractionTime}s
                     </p>
                   </div>
-                  <div className="flex gap-2 ml-4">
-                    <button
-                      onClick={() => loadRecipe(recipe)}
-                      className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-2 rounded-lg hover:bg-blue-100 transition-colors"
+                  <div className="flex gap-2 ml-4 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                    {/* <button
+                      onClick={() => useRecipeAsBase(recipe)}
+                      className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-2 rounded-lg hover:bg-blue-100 transition-colors"
                     >
                       USAR
+                    </button> */}
+                    <button
+                      onClick={() => editRecipe(recipe)}
+                      className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-2 rounded-lg hover:bg-amber-100 transition-colors"
+                    >
+                      ✏️
                     </button>
                     <button
                       onClick={() => requestDeleteRecipe(recipe.id)}
-                      className="text-xs font-bold text-red-500 bg-red-50 px-3 py-2 rounded-lg hover:bg-red-100 transition-colors"
+                      className="text-[10px] font-bold text-red-500 bg-red-50 px-2 py-2 rounded-lg hover:bg-red-100 transition-colors"
                     >
                       X
                     </button>
@@ -732,7 +987,7 @@ const HomePage = () => {
               </h3>
               <button
                 onClick={() => setAiDiagnosis(null)}
-                className="text-xs font-bold text-neutral-400 bg-neutral-100 px-3 py-1.5 rounded-lg"
+                className="text-[10px] font-bold text-neutral-400 bg-neutral-100 px-3 py-1.5 rounded-lg hover:bg-neutral-200"
               >
                 FECHAR
               </button>

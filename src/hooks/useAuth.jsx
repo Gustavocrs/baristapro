@@ -1,6 +1,7 @@
 /**
  * @file useAuth.jsx
  * @description Hook customizado para gerenciar o ciclo de vida da autenticação do Firebase.
+ * Atualizado com tratamento avançado de erros (Error Mapping) para falhas de infraestrutura.
  */
 
 "use client";
@@ -28,11 +29,32 @@ export const useAuth = () => {
   }, []);
 
   const loginWithGoogle = async () => {
-    if (!auth) return alert("Firebase Auth não inicializado.");
+    if (!auth) {
+      alert(
+        "Firebase Auth não inicializado. Verifique as variáveis de ambiente.",
+      );
+      return;
+    }
+
     try {
       await signInWithPopup(auth, googleProvider);
     } catch (error) {
-      console.error("Erro na autenticação:", error);
+      console.error("❌ Erro na autenticação:", error);
+
+      // Mapeamento de erros comuns do Firebase Auth
+      if (error.code === "auth/configuration-not-found") {
+        alert(
+          "Erro de Infraestrutura: O provedor Google não está ativado no Firebase Console (Sign-in method).",
+        );
+      } else if (error.code === "auth/popup-closed-by-user") {
+        console.warn("Usuário cancelou o login.");
+      } else if (error.code === "auth/unauthorized-domain") {
+        alert(
+          "Erro de Domínio: O domínio atual não está autorizado no Firebase Console.",
+        );
+      } else {
+        alert(`Falha no login: ${error.message}`);
+      }
     }
   };
 
@@ -41,7 +63,7 @@ export const useAuth = () => {
     try {
       await signOut(auth);
     } catch (error) {
-      console.error("Erro ao deslogar:", error);
+      console.error("❌ Erro ao deslogar:", error);
     }
   };
 
