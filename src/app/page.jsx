@@ -1,7 +1,8 @@
 /**
  * @file page.jsx
  * @description Root da aplicação. Orquestra autenticação, isolamento de DB por UID,
- * modais customizados, fluxo em Wizard, modo de visualização e edição de receitas.
+ * modais customizados, fluxo em Wizard, modo de visualização com cache de IA e edição de receitas.
+ * Matriz sensorial expandida para leitura bidimensional de crema.
  */
 
 "use client";
@@ -29,18 +30,13 @@ const ACCESSORY_LIST = {
   geral: ["Balança de Precisão", "RDT (Borrifador)", "Termômetro"],
 };
 
-// Helper de tradução para o modo Read-Only
 const translateSensory = (key, value) => {
   const map = {
     acidity: {low: "BAIXA", medium: "EQUILIBRADA", high: "ALTA"},
     bitterness: {low: "BAIXA", medium: "EQUILIBRADA", high: "ALTA"},
     body: {low: "RALO", medium: "MÉDIO", high: "DENSO"},
-    crema: {
-      pale: "PÁLIDA/RALA",
-      ideal: "AVELÃ DENSA",
-      dark: "MUITO ESCURA",
-      bubbly: "BOLHAS GRANDES",
-    },
+    cremaColor: {pale: "PÁLIDA", hazelnut: "AVELÃ", dark: "ESCURA"},
+    cremaDensity: {thin: "RALA", dense: "DENSA", bubbly: "C/ BOLHAS"},
   };
   return map[key]?.[value] || value;
 };
@@ -60,12 +56,10 @@ const HomePage = () => {
     accessories: [],
   });
 
-  // Estados de Navegação e Fluxo
   const [isExtracting, setIsExtracting] = useState(false);
   const [viewingRecipe, setViewingRecipe] = useState(null);
   const [editingRecipeId, setEditingRecipeId] = useState(null);
 
-  // Estado de Dados da Extração
   const [extraction, setExtraction] = useState({
     dose: "",
     cupYield: "",
@@ -75,7 +69,8 @@ const HomePage = () => {
       acidity: "medium",
       bitterness: "medium",
       body: "medium",
-      crema: "ideal",
+      cremaColor: "hazelnut",
+      cremaDensity: "dense",
     },
   });
 
@@ -138,7 +133,6 @@ const HomePage = () => {
     loadData();
   }, [user, authLoading]);
 
-  // RESET NAVIGATION
   const resetToHome = () => {
     setIsExtracting(false);
     setViewingRecipe(null);
@@ -207,14 +201,12 @@ const HomePage = () => {
 
         let updatedRecipes;
         if (editingRecipeId) {
-          // UPDATE
           updatedRecipes = recipes.map((r) =>
             r.id === editingRecipeId
               ? {...r, name: val, extraction: {...extraction}}
               : r,
           );
         } else {
-          // INSERT
           const newRecipe = {
             id: Date.now().toString(),
             name: val,
@@ -233,8 +225,9 @@ const HomePage = () => {
     });
   };
 
-  // NAVEGAÇÃO DE RECEITAS
   const viewRecipeCard = (recipe) => {
+    setActiveSetupId(recipe.setupId);
+    setExtraction(recipe.extraction);
     setViewingRecipe(recipe);
     setIsExtracting(false);
     setEditingRecipeId(null);
@@ -254,19 +247,6 @@ const HomePage = () => {
     setAiDiagnosis(null);
   };
 
-  const useRecipeAsBase = (recipe) => {
-    const setupExists = setups.find((s) => s.id === recipe.setupId);
-    if (!setupExists)
-      return alert("O setup associado a esta receita foi excluído.");
-
-    setActiveSetupId(recipe.setupId);
-    setExtraction(recipe.extraction);
-    setEditingRecipeId(null); // Cria como nova
-    setViewingRecipe(null);
-    setIsExtracting(true);
-    setAiDiagnosis(null);
-  };
-
   const startNewExtraction = () => {
     setExtraction({
       dose: "",
@@ -277,7 +257,8 @@ const HomePage = () => {
         acidity: "medium",
         bitterness: "medium",
         body: "medium",
-        crema: "ideal",
+        cremaColor: "hazelnut",
+        cremaDensity: "dense",
       },
     });
     setEditingRecipeId(null);
@@ -297,9 +278,21 @@ const HomePage = () => {
       });
       const data = await response.json();
       if (data.error) throw new Error(data.error);
-      setAiDiagnosis(data.analysis);
-      setIsExtracting(false);
-      setViewingRecipe(null);
+
+      const generatedAnalysis = data.analysis;
+      setAiDiagnosis(generatedAnalysis);
+
+      if (viewingRecipe) {
+        const updatedRecipe = {...viewingRecipe, diagnosis: generatedAnalysis};
+        const updatedRecipes = recipes.map((r) =>
+          r.id === viewingRecipe.id ? updatedRecipe : r,
+        );
+        setRecipes(updatedRecipes);
+        setViewingRecipe(updatedRecipe);
+        saveToFirebase({setups, recipes: updatedRecipes, activeSetupId});
+      } else {
+        setIsExtracting(false);
+      }
     } catch (e) {
       setAiDiagnosis(
         `<div class="p-4 bg-red-50 text-red-600 rounded-xl font-bold">Erro: ${e.message}</div>`,
@@ -323,7 +316,6 @@ const HomePage = () => {
 
   return (
     <div className="min-h-screen bg-neutral-50 pb-20">
-      {/* Modais Customizados */}
       {confirmModal.isOpen && (
         <div className="fixed inset-0 bg-neutral-900/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl animate-in zoom-in-95">
@@ -401,7 +393,6 @@ const HomePage = () => {
           </button>
         </header>
 
-        {/* SETUP (Oculto se visualizando ou extraindo) */}
         {!isExtracting && !viewingRecipe && (
           <section className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200 animate-in fade-in">
             <div className="flex justify-between items-center mb-6">
@@ -528,7 +519,55 @@ const HomePage = () => {
           </section>
         )}
 
-        {/* WIZARD DE EXTRAÇÃO (Edição/Criação) */}
+        {!isExtracting && !viewingRecipe && recipes.length > 0 && (
+          <section className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200 animate-in fade-in">
+            <h2 className="text-lg font-bold text-neutral-800 mb-4">
+              Minhas Receitas
+            </h2>
+            <div className="space-y-3 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
+              {recipes.map((recipe) => {
+                const setup = setups.find((s) => s.id === recipe.setupId);
+                const methodIcon = setup?.method === "espresso" ? "☕" : "💧";
+                return (
+                  <div
+                    key={recipe.id}
+                    className="flex justify-between items-center bg-neutral-50 p-3 rounded-xl border border-neutral-100 group"
+                  >
+                    <div
+                      className="cursor-pointer flex-1"
+                      onClick={() => viewRecipeCard(recipe)}
+                    >
+                      <h4 className="font-bold text-neutral-800 text-sm group-hover:text-blue-600 transition-colors">
+                        {recipe.name}
+                      </h4>
+                      <p className="text-[10px] text-neutral-400 font-medium mt-0.5">
+                        {recipe.date} • {methodIcon}{" "}
+                        {setup?.name || "Desconhecido"} • Dose:{" "}
+                        {recipe.extraction.dose}g • Tempo:{" "}
+                        {recipe.extraction.extractionTime}s
+                      </p>
+                    </div>
+                    <div className="flex gap-2 ml-4 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => editRecipe(recipe)}
+                        className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-2 rounded-lg hover:bg-amber-100 transition-colors"
+                      >
+                        ✏️
+                      </button>
+                      <button
+                        onClick={() => requestDeleteRecipe(recipe.id)}
+                        className="text-[10px] font-bold text-red-500 bg-red-50 px-2 py-2 rounded-lg hover:bg-red-100 transition-colors"
+                      >
+                        X
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
         {activeSetup && !isExtracting && !viewingRecipe && (
           <button
             onClick={startNewExtraction}
@@ -683,39 +722,75 @@ const HomePage = () => {
                 ))}
 
                 {activeSetup.method === "espresso" && (
-                  <div className="space-y-2 pt-4 border-t border-neutral-100">
-                    <div className="flex justify-between items-end">
-                      <span className="font-bold text-amber-800">
-                        Crema Visual
-                      </span>
-                      <span className="text-[10px] text-amber-600/60 uppercase">
-                        Aspecto?
-                      </span>
+                  <div className="space-y-6 pt-4 border-t border-neutral-100">
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-end">
+                        <span className="font-bold text-amber-800">
+                          Cor da Crema
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        {[
+                          {val: "pale", label: "Pálida"},
+                          {val: "hazelnut", label: "Avelã"},
+                          {val: "dark", label: "Escura"},
+                        ].map((c) => (
+                          <button
+                            key={c.val}
+                            onClick={() =>
+                              setExtraction({
+                                ...extraction,
+                                sensory: {
+                                  ...extraction.sensory,
+                                  cremaColor: c.val,
+                                },
+                              })
+                            }
+                            className={`py-3 rounded-xl text-xs font-black transition-all ${
+                              extraction.sensory.cremaColor === c.val
+                                ? `bg-amber-600 text-white shadow-md`
+                                : "bg-amber-50 text-amber-700/50"
+                            }`}
+                          >
+                            {c.label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      {[
-                        {val: "pale", label: "Pálida/Rala"},
-                        {val: "ideal", label: "Avelã Densa"},
-                        {val: "dark", label: "Muito Escura"},
-                        {val: "bubbly", label: "Bolhas Grandes"},
-                      ].map((c) => (
-                        <button
-                          key={c.val}
-                          onClick={() =>
-                            setExtraction({
-                              ...extraction,
-                              sensory: {...extraction.sensory, crema: c.val},
-                            })
-                          }
-                          className={`py-3 rounded-xl text-xs font-black transition-all ${
-                            extraction.sensory.crema === c.val
-                              ? `bg-amber-600 text-white shadow-md`
-                              : "bg-amber-50 text-amber-700/50"
-                          }`}
-                        >
-                          {c.label}
-                        </button>
-                      ))}
+
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-end">
+                        <span className="font-bold text-amber-800">
+                          Densidade da Crema
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        {[
+                          {val: "thin", label: "Rala"},
+                          {val: "dense", label: "Densa"},
+                          {val: "bubbly", label: "Bolhas"},
+                        ].map((c) => (
+                          <button
+                            key={c.val}
+                            onClick={() =>
+                              setExtraction({
+                                ...extraction,
+                                sensory: {
+                                  ...extraction.sensory,
+                                  cremaDensity: c.val,
+                                },
+                              })
+                            }
+                            className={`py-3 rounded-xl text-xs font-black transition-all ${
+                              extraction.sensory.cremaDensity === c.val
+                                ? `bg-amber-600 text-white shadow-md`
+                                : "bg-amber-50 text-amber-700/50"
+                            }`}
+                          >
+                            {c.label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -765,7 +840,6 @@ const HomePage = () => {
           </section>
         )}
 
-        {/* READ-ONLY CARD DA RECEITA (Exibe os dados de forma limpa) */}
         {viewingRecipe && (
           <section className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200 animate-in fade-in slide-in-from-bottom-4">
             <div className="flex justify-between items-start mb-6 border-b border-neutral-100 pb-4">
@@ -859,53 +933,51 @@ const HomePage = () => {
                   )}
                 </p>
               </div>
-              {viewingRecipe.extraction.sensory.crema && (
+              {viewingRecipe.extraction.sensory.cremaColor && (
                 <div className="px-3 py-2 bg-amber-50 rounded-lg">
                   <p className="text-[10px] text-amber-600 font-bold uppercase">
                     Crema
                   </p>
-                  <p className="text-xs font-black text-amber-800">
+                  <p className="text-[10px] font-black text-amber-800 leading-tight">
                     {translateSensory(
-                      "crema",
-                      viewingRecipe.extraction.sensory.crema,
+                      "cremaColor",
+                      viewingRecipe.extraction.sensory.cremaColor,
+                    )}
+                    <br />
+                    {translateSensory(
+                      "cremaDensity",
+                      viewingRecipe.extraction.sensory.cremaDensity,
                     )}
                   </p>
                 </div>
               )}
             </div>
 
-            <div className="mt-8 grid grid-cols-2 gap-3">
-              {/* <button
-                onClick={() => useRecipeAsBase(viewingRecipe)}
-                className="bg-blue-600 text-white p-4 rounded-xl font-bold text-sm shadow-md hover:bg-blue-700 transition-colors"
-              >
-                USAR COMO BASE
-              </button> */}
-
+            <div className="mt-8 flex flex-col sm:flex-row gap-3">
               <button
                 onClick={analyzeWithAI}
                 disabled={isAnalyzing}
-                className="flex-[2] bg-gradient-to-r from-purple-600 to-blue-600 text-white p-4 rounded-2xl font-black text-sm shadow-xl shadow-blue-100 flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-70 disabled:scale-100"
+                className="flex-[2] bg-gradient-to-r from-purple-600 to-blue-600 text-white p-4 rounded-xl font-black text-sm shadow-md hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-70 disabled:scale-100 flex items-center justify-center gap-2"
               >
                 {isAnalyzing ? (
                   <>
                     <svg
-                      className="animate-spin h-5 w-5 text-white"
+                      className="animate-spin h-4 w-4 text-white"
                       fill="none"
                       viewBox="0 0 24 24"
                     >
                       <circle
-                        className="opacity-25"
                         cx="12"
                         cy="12"
                         r="10"
                         stroke="currentColor"
                         strokeWidth="4"
+                        className="opacity-25"
                       ></circle>
                       <path
-                        className="opacity-75"
                         fill="currentColor"
                         d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                        className="opacity-75"
                       ></path>
                     </svg>
                     ANALISANDO...
@@ -914,68 +986,50 @@ const HomePage = () => {
                   "🪄 GERAR LAUDO"
                 )}
               </button>
+
+              {viewingRecipe.diagnosis && (
+                <button
+                  onClick={() => setAiDiagnosis(viewingRecipe.diagnosis)}
+                  className="flex-1 bg-purple-100 text-purple-700 p-4 rounded-xl font-black text-sm hover:bg-purple-200 transition-colors"
+                >
+                  👁️ VER ÚLTIMO
+                </button>
+              )}
+
               <button
                 onClick={() => editRecipe(viewingRecipe)}
-                className="bg-neutral-100 text-neutral-800 p-4 rounded-xl font-bold text-sm hover:bg-neutral-200 transition-colors"
+                className="flex-1 bg-neutral-100 text-neutral-800 p-4 rounded-xl font-black text-sm hover:bg-neutral-200 transition-colors"
               >
                 EDITAR RECEITA
               </button>
             </div>
-          </section>
-        )}
 
-        {/* LISTA DE RECEITAS (Oculta se extraindo ou visualizando) */}
-        {!isExtracting && !viewingRecipe && recipes.length > 0 && (
-          <section className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200 animate-in fade-in">
-            <h2 className="text-lg font-bold text-neutral-800 mb-4">
-              Minhas Receitas
-            </h2>
-            <div className="space-y-3 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
-              {recipes.map((recipe) => (
-                <div
-                  key={recipe.id}
-                  className="flex justify-between items-center bg-neutral-50 p-3 rounded-xl border border-neutral-100 group"
-                >
-                  <div
-                    className="cursor-pointer flex-1"
-                    onClick={() => viewRecipeCard(recipe)}
+            {aiDiagnosis && !isAnalyzing && (
+              <div className="mt-8 border-t border-neutral-100 pt-6 animate-in fade-in slide-in-from-top-4">
+                <div className="flex justify-between items-start mb-6">
+                  <h3 className="text-lg font-black flex items-center gap-3 text-neutral-800">
+                    <span className="bg-purple-100 text-lg p-2 rounded-xl shadow-sm">
+                      🤖
+                    </span>{" "}
+                    Laudo IA
+                  </h3>
+                  <button
+                    onClick={() => setAiDiagnosis(null)}
+                    className="text-[10px] font-bold text-neutral-400 bg-neutral-50 px-3 py-1.5 rounded-lg hover:bg-neutral-100"
                   >
-                    <h4 className="font-bold text-neutral-800 text-sm group-hover:text-blue-600 transition-colors">
-                      {recipe.name}
-                    </h4>
-                    <p className="text-[10px] text-neutral-400 font-medium mt-0.5">
-                      {recipe.date} • Dose: {recipe.extraction.dose}g • Tempo:{" "}
-                      {recipe.extraction.extractionTime}s
-                    </p>
-                  </div>
-                  <div className="flex gap-2 ml-4 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-                    {/* <button
-                      onClick={() => useRecipeAsBase(recipe)}
-                      className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-2 rounded-lg hover:bg-blue-100 transition-colors"
-                    >
-                      USAR
-                    </button> */}
-                    <button
-                      onClick={() => editRecipe(recipe)}
-                      className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-2 rounded-lg hover:bg-amber-100 transition-colors"
-                    >
-                      ✏️
-                    </button>
-                    <button
-                      onClick={() => requestDeleteRecipe(recipe.id)}
-                      className="text-[10px] font-bold text-red-500 bg-red-50 px-2 py-2 rounded-lg hover:bg-red-100 transition-colors"
-                    >
-                      X
-                    </button>
-                  </div>
+                    OCULTAR
+                  </button>
                 </div>
-              ))}
-            </div>
+                <div
+                  className="w-full"
+                  dangerouslySetInnerHTML={{__html: aiDiagnosis}}
+                />
+              </div>
+            )}
           </section>
         )}
 
-        {/* LAUDO IA */}
-        {aiDiagnosis && !isAnalyzing && (
+        {aiDiagnosis && !isAnalyzing && !viewingRecipe && (
           <div className="bg-white rounded-3xl p-6 sm:p-8 border border-neutral-200 shadow-xl animate-in fade-in slide-in-from-bottom-8 duration-500 mt-8 relative overflow-hidden">
             <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-purple-500 to-blue-500"></div>
             <div className="flex justify-between items-start mb-6 border-b border-neutral-100 pb-4">

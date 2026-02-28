@@ -1,7 +1,7 @@
 /**
  * @file route.js
  * @description Rota de servidor para integração com Gemini AI.
- * Prompt estrutural Tailwind injetado, com suporte condicional de análise de Crema.
+ * Prompt estrutural Tailwind injetado, com suporte à matriz bidimensional de Crema (Cor + Densidade).
  */
 
 import {GoogleGenerativeAI} from "@google/generative-ai";
@@ -34,8 +34,8 @@ export const POST = async (request) => {
       dose > 0 && cupYield > 0 ? (cupYield / dose).toFixed(1) : "N/A";
 
     const cremaInfo =
-      activeSetup.method === "espresso" && extraction.sensory.crema
-        ? `- Aspecto Visual (Crema): ${extraction.sensory.crema}`
+      activeSetup.method === "espresso" && extraction.sensory.cremaColor
+        ? `- Crema: Cor ${extraction.sensory.cremaColor} | Textura/Densidade: ${extraction.sensory.cremaDensity}`
         : "";
 
     const textPrompt = `

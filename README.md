@@ -1,4 +1,4 @@
-# Meu Expresso
+# BaristaPro
 
 Este é um projeto desenvolvido em Next.js focado em oferecer uma plataforma robusta para gerenciamento de usuários e dados acadêmicos/administrativos.
 

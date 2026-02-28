@@ -1,7 +1,7 @@
 import "../styles/globals.css";
 
 export const metadata = {
-  title: "Calibração Expresso - Oster + Moedor Manual",
+  title: "BaristaPro",
   description: "Guia interativo para calibrar seu café expresso.",
 };
 
