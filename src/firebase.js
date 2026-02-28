@@ -1,6 +1,7 @@
 /**
- * @file firebase.js
- * @description Inicialização do Firebase App, Firestore e Auth.
+ * @file src/firebase.js
+ * @description Inicialização segura do Firebase App, Firestore e Auth utilizando
+ * variáveis de ambiente prefixadas com NEXT_PUBLIC_ para exposição ao client-side.
  */
 
 import {initializeApp} from "firebase/app";
@@ -29,7 +30,11 @@ let googleProvider = null;
 
 if (hasPlaceholder) {
   console.warn(
-    "Firebase não configurado (placeholders detectados). Auth e Firestore offline.",
+    "Firebase não configurado ou variáveis ausentes. Auth e Firestore offline.",
+  );
+} else if (!firebaseConfig.apiKey) {
+  console.error(
+    "ERRO CRÍTICO: Chave de API não encontrada no ambiente. Verifique o prefixo NEXT_PUBLIC_ no .env.local.",
   );
 } else {
   const app = initializeApp(firebaseConfig);
