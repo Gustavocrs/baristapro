@@ -1,7 +1,7 @@
 /**
  * @file route.js
  * @description Rota de servidor para integração com Gemini AI.
- * Formata os dados aninhados do método ativo e o array de acessórios antes de injetar no LLM.
+ * Implementa Prompting Estrutural injetando marcação Tailwind diretamente na saída do LLM.
  */
 
 import {GoogleGenerativeAI} from "@google/generative-ai";
@@ -13,66 +13,73 @@ export const POST = async (request) => {
 
     if (!apiKey) {
       return NextResponse.json(
-        {
-          error:
-            "Chave de API ausente no servidor. Configure GOOGLE_API_KEY no .env.local.",
-        },
+        {error: "Chave de API ausente no servidor."},
         {status: 500},
       );
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({model: "gemini-2.5-flash-lite"});
 
-    const {inputs, imageParts} = await request.json();
+    const model = genAI.getGenerativeModel({
+      model: process.env.GOOGLE_AI_MODEL,
+    });
 
-    // Extrai dados do método ativo
-    const methodData = inputs[inputs.method] || {};
+    const {extraction, activeSetup, imageParts} = await request.json();
+
     const accessoriesString =
-      Array.isArray(inputs.accessories) && inputs.accessories.length > 0
-        ? inputs.accessories.join(", ")
-        : "Nenhum informado";
+      activeSetup.accessories?.length > 0
+        ? activeSetup.accessories.join(", ")
+        : "Nenhum";
 
-    // Calcula proporção com segurança
-    const dose = parseFloat(methodData.dose) || 0;
-    const cupYield = parseFloat(methodData.cupYield) || 0;
-    const ratioCalc =
+    const dose = parseFloat(extraction.dose) || 0;
+    const cupYield = parseFloat(extraction.cupYield) || 0;
+    const ratio =
       dose > 0 && cupYield > 0 ? (cupYield / dose).toFixed(1) : "N/A";
 
     const textPrompt = `
-      Você é um barista especialista com conhecimento em equipamentos caseiros e profissionais. 
-      Analise os seguintes dados e imagens de uma extração de café e forneça um diagnóstico técnico, direto e avançado.
+      Você é um Barista Campeão Mundial. Analise esta extração com rigor técnico.
+
+      REGRA ABSOLUTA DE SAÍDA: 
+      - Retorne APENAS código HTML válido. NADA DE TEXTO FORA DAS TAGS.
+      - NÃO inicie com saudações (ex: "Olá", "Prezado").
+      - NÃO use marcação Markdown (proibido usar ###, ** ou blocos \`\`\`html).
+      - Você DEVE seguir EXATAMENTE a estrutura de classes Tailwind CSS abaixo, apenas preenchendo os colchetes com sua análise:
+
+      <div class="space-y-5">
+        <div class="p-5 bg-red-50 border-l-4 border-red-500 rounded-r-2xl shadow-sm">
+          <h3 class="text-red-800 font-black text-sm mb-1 uppercase tracking-wider flex items-center gap-2">🎯 Diagnóstico Clínico</h3>
+          <p class="text-red-950 font-medium text-sm leading-relaxed">[Seu diagnóstico direto]</p>
+        </div>
+        
+        <div class="p-5 bg-emerald-50 border-l-4 border-emerald-500 rounded-r-2xl shadow-sm">
+          <h3 class="text-emerald-800 font-black text-sm mb-1 uppercase tracking-wider flex items-center gap-2">💡 Plano de Ação</h3>
+          <p class="text-emerald-950 font-medium text-sm leading-relaxed">[Sua ação técnica recomendada no equipamento]</p>
+        </div>
+        
+        <div class="p-5 bg-neutral-100 border border-neutral-200 rounded-2xl shadow-sm">
+          <h3 class="text-neutral-800 font-black text-sm mb-3 uppercase tracking-wider flex items-center gap-2">🔬 Análise Detalhada</h3>
+          <ul class="space-y-3">
+            <li class="text-sm text-neutral-700 leading-relaxed border-b border-neutral-200 pb-3 last:border-0 last:pb-0">
+              <strong class="text-neutral-900 block mb-0.5">[Variável/Ponto de Análise]</strong> [Explicação técnica profunda]
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      SETUP ATIVO:
+      - Perfil: ${activeSetup.name}
+      - Método: ${activeSetup.method.toUpperCase()}
+      - Equipamento: ${activeSetup.machine} + ${activeSetup.grinder}
+      - Acessórios: ${accessoriesString}
       
-      A resposta DEVE ser em HTML. Use o formato <h3><strong>Título</strong></h3> para os títulos "Diagnóstico", "Sugestão Principal" e "Análise Detalhada".
-      Pule uma linha ao final de cada bloco. Use <p> para os parágrafos de texto e <ul>/<li> para a análise detalhada.
-      Use <b> para destaques. Não use markdown (###).
-
-      SETUP DO USUÁRIO:
-      - Máquina/Método Base: ${inputs.machine || "Não informado"}
-      - Moedor: ${inputs.grinder || "Não informado"}
-      - Acessórios extras: ${accessoriesString}
+      DADOS TÉCNICOS:
+      - Dose: ${extraction.dose}g | Rendimento: ${extraction.cupYield}g (Ratio 1:${ratio})
+      - Moagem: ${extraction.clicks} cliques | Tempo: ${extraction.extractionTime}s
       
-      DADOS DA EXTRAÇÃO:
-      - Método selecionado: ${inputs.method.toUpperCase()}
-      - Dose (pó): ${methodData.dose}g
-      - Rendimento Final: ${methodData.cupYield}g (Proporção resultante: 1:${ratioCalc})
-      - Moagem: ${methodData.clicks} clicks
-      - Nível de Torra: ${methodData.roast}
-      - Tempo Registrado: ${methodData.extractionTime}s
-      - Crema reportada: ${inputs.method === "espresso" ? methodData.crema : "N/A (Filtro)"}
-      - Sabor: ${methodData.taste} (1=Ácido/Sub, 2=Equilibrado, 3=Amargo/Super)
-
-      Se o método for ESPRESSO, o foco deve ser retenção no moedor, canais (WDT), e tempo alvo de 25-35s. Considere as limitações do moedor ou da máquina reportada.
-      Se o método for V60, foque no tempo de bypass, retenção de fluxo do filtro e alvos na casa dos 2 minutos para concentrados.
-      
-      Diagnóstico:
-      [Diagnóstico claro]
-
-      Sugestão Principal:
-      [Ação direta, ex: "Suba o clique", "Ajuste o WDT", etc.]
-
-      Análise Detalhada:
-      [Explicação do porquê, linkando os sintomas às peças do setup.]
+      PERCEPÇÃO SENSORIAL:
+      - Acidez: ${extraction.sensory.acidity}
+      - Amargor: ${extraction.sensory.bitterness}
+      - Corpo: ${extraction.sensory.body}
     `;
 
     const formattedImageParts = (imageParts || []).map((part) => ({
@@ -82,22 +89,27 @@ export const POST = async (request) => {
       },
     }));
 
-    const promptParts = [{text: textPrompt}, ...formattedImageParts];
+    const result = await model.generateContent([
+      {text: textPrompt},
+      ...formattedImageParts,
+    ]);
 
-    const result = await model.generateContent(promptParts).catch((err) => {
-      console.error("❌ Erro na geração:", err);
-      throw err;
-    });
-
-    const response = result.response;
+    const response = await result.response;
     let text = response.text();
-    text = text.replace(/^```html\s*/i, "").replace(/\s*```$/i, "");
 
-    return NextResponse.json({analysis: text.trim()});
+    text = text
+      .replace(/```html/gi, "")
+      .replace(/```/g, "")
+      .trim();
+
+    return NextResponse.json({analysis: text});
   } catch (error) {
     console.error("❌ Erro na API:", error);
     return NextResponse.json(
-      {error: "Erro na análise. Verifique a chave de API e a conexão."},
+      {
+        error: "Erro na análise da IA.",
+        details: error instanceof Error ? error.message : String(error),
+      },
       {status: 500},
     );
   }

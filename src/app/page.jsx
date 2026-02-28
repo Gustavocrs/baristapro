@@ -1,775 +1,570 @@
 /**
  * @file page.jsx
- * @description Interface de calibração. Implementa arquitetura de estado isolado por 
- * método de extração (Expresso/V60) e seleção de acessórios via checkboxes. 
- * Contém parser de retrocompatibilidade para dados legados.
+ * @description Gerenciamento de setups, extração sensorial e persistência de receitas.
  */
 
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
-import { db } from "../firebase";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import React, {useState, useEffect} from "react";
+import {db} from "../firebase";
+import {doc, getDoc, setDoc} from "firebase/firestore";
 
-// Dicionário de acessórios para renderização dos checkboxes
 const ACCESSORY_LIST = {
   espresso: [
-    { id: "wdt", label: "WDT (Agulhas)" },
-    { id: "tamper", label: "Tamper" },
-    { id: "tamper_mola", label: "Tamper com Mola" },
-    { id: "distribuidor", label: "Distribuidor" },
-    { id: "puck_screen", label: "Puck Screen" },
-    { id: "funil", label: "Funil Magnético" }
+    "WDT (Agulhas)",
+    "Tamper Pro",
+    "Puck Screen",
+    "Distribuidor",
+    "Funil Magnético",
   ],
-  filtro: [
-    { id: "chaleira_ganso", label: "Chaleira Bico de Ganso" },
-    { id: "filtro_papel", label: "Filtro de Papel" },
-    { id: "filtro_inox", label: "Filtro de Inox" },
-    { id: "melitta", label: "Suporte Melitta" },
-    { id: "v60", label: "Suporte V60" }
+  coado: [
+    "Chaleira Bico de Ganso",
+    "Filtro V60",
+    "Filtro Melitta",
+    "Filtro Inox",
   ],
-  geral: [
-    { id: "balanca", label: "Balança de Precisão" },
-    { id: "rdt", label: "Borrifador (RDT)" },
-    { id: "termometro", label: "Termômetro" }
-  ]
+  geral: ["Balança de Precisão", "RDT (Borrifador)", "Termômetro"],
 };
 
 const HomePage = () => {
-  const [diagnosis, setDiagnosis] = useState(null);
-  const [initialSettings, setInitialSettings] = useState(null);
-  const [aiDiagnosis, setAiDiagnosis] = useState(null);
-  const [firebaseError, setFirebaseError] = useState(null);
-  const [successMessage, setSuccessMessage] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
-  
-  const [isSetupOpen, setIsSetupOpen] = useState(false);
-  const [isExtractionOpen, setIsExtractionOpen] = useState(true);
-  const [isTelemetryOpen, setIsTelemetryOpen] = useState(true);
-
-  // Arquitetura de estado aninhada
-  const [inputs, setInputs] = useState({
-    method: "espresso",
+  const [setups, setSetups] = useState([]);
+  const [recipes, setRecipes] = useState([]);
+  const [activeSetupId, setActiveSetupId] = useState("");
+  const [isAddingSetup, setIsAddingSetup] = useState(false);
+  const [newSetup, setNewSetup] = useState({
+    name: "",
     machine: "",
     grinder: "",
+    method: "espresso",
     accessories: [],
-    espresso: {
-      dose: "", cupYield: "", clicks: "", roast: "medium", extractionTime: "", crema: "ideal", taste: "2"
-    },
-    v60: {
-      dose: "", cupYield: "", clicks: "", roast: "medium", extractionTime: "", taste: "2"
-    }
   });
 
-  const [uploadedFiles, setUploadedFiles] = useState([]);
-  const [isCameraModalOpen, setCameraModalOpen] = useState(false);
+  const [extraction, setExtraction] = useState({
+    dose: "",
+    cupYield: "",
+    clicks: "",
+    extractionTime: "",
+    sensory: {acidity: "medium", bitterness: "medium", body: "medium"},
+  });
 
-  const imagePreviewRef = useRef(null);
-  const cameraFeedRef = useRef(null);
-  const photoCanvasRef = useRef(null);
-  const cameraStreamRef = useRef(null);
-  const inputsRef = useRef(inputs);
-  const firebaseUnavailableRef = useRef(false);
+  const [aiDiagnosis, setAiDiagnosis] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-  useEffect(() => {
-    inputsRef.current = inputs;
-  }, [inputs]);
-
-  /**
-   * Converte payloads legados (estado achatado) para o novo padrão isolado.
-   * Evita erros de undefined ao carregar de localStorage/Firestore velhos.
-   */
-  const migrateLegacyData = (data) => {
-    let migrated = { ...data };
-    
-    // Migração de acessórios (String para Array)
-    if (typeof migrated.accessories === "string") {
-      migrated.accessories = migrated.accessories.split(",").map(a => a.trim()).filter(Boolean);
-    } else if (!Array.isArray(migrated.accessories)) {
-      migrated.accessories = [];
-    }
-
-    // Migração de estado de extração (Raiz para Sub-objeto)
-    if (migrated.dose !== undefined && !migrated.espresso) {
-      migrated.espresso = {
-        dose: migrated.dose || "",
-        cupYield: migrated.cupYield || "",
-        clicks: migrated.clicks || "",
-        roast: migrated.roast || "medium",
-        extractionTime: migrated.extractionTime || "",
-        crema: migrated.crema || "ideal",
-        taste: migrated.taste || "2",
-      };
-      migrated.v60 = { dose: "", cupYield: "", clicks: "", roast: "medium", extractionTime: "", taste: "2" };
-      
-      const keysToRemove = ["dose", "cupYield", "clicks", "roast", "extractionTime", "crema", "taste"];
-      keysToRemove.forEach(k => delete migrated[k]);
-    }
-    
-    // Garante as chaves vitais
-    if (!migrated.espresso) migrated.espresso = { dose: "", cupYield: "", clicks: "", roast: "medium", extractionTime: "", crema: "ideal", taste: "2" };
-    if (!migrated.v60) migrated.v60 = { dose: "", cupYield: "", clicks: "", roast: "medium", extractionTime: "", taste: "2" };
-    if (!migrated.method) migrated.method = "espresso";
-
-    return migrated;
-  };
-
-  const updateUI = useCallback((currentInputs) => {
-    const method = currentInputs.method || "espresso";
-    const methodData = currentInputs[method];
-    
-    const dose = parseFloat(methodData.dose) || 0;
-    const cupYield = parseFloat(methodData.cupYield) || 0;
-    const clicks = parseInt(methodData.clicks) || 8;
-    const roast = methodData.roast;
-    const tasteValue = parseInt(methodData.taste) || 2;
-    const actualTime = parseInt(methodData.extractionTime) || (method === "espresso" ? 28 : 135);
-    const crema = methodData.crema;
-
-    const calculatedRatio = dose > 0 && cupYield > 0 ? (cupYield / dose).toFixed(1) : 0;
-    const targetTimeText = method === "espresso" ? "25-35s" : "2:00 - 2:30 min (120-150s)";
-
-    setInitialSettings(
-      <ul className="list-disc list-inside space-y-1">
-        <li>Método: <b className="capitalize">{method}</b></li>
-        <li>Dose: <b>{dose}g</b></li>
-        <li>Rendimento na Xícara: <b className="text-lg text-blue-600">{cupYield}g</b></li>
-        <li>Proporção Calculada: <b className="text-blue-600">1:{calculatedRatio}</b></li>
-        <li>Seu Tempo Real: <b className="text-lg text-blue-600">{actualTime}s</b> (Alvo: {targetTimeText})</li>
-      </ul>
-    );
-
-    let diagnosisContent;
-
-    const roastTip = {
-      light: "Torras claras são densas e difíceis de extrair. Use água mais quente (93-96°C).",
-      dark: "Torras escuras extraem muito rápido e amargam fácil. Baixe a temperatura da água (88-90°C).",
-      medium: "Torras médias são equilibradas. Água a 92°C costuma ser o ponto de partida ideal.",
-    };
-
-    if (method === "espresso") {
-      const getCremaFeedback = () => {
-        if (crema === "pale") return "A crema pálida e rala indica sub-extração ou temperatura da água muito baixa.";
-        if (crema === "dark") return "Crema muito escura com manchas brancas aponta para super-extração ou temperatura muito alta.";
-        if (crema === "bubbly") return "Crema com bolhas grandes indica grãos muito frescos (excesso de CO2).";
-        return "Crema com cor de avelã e densa sugere boa extração dos óleos.";
-      };
-
-      if (tasteValue === 2 && actualTime >= 25 && actualTime <= 35) {
-        diagnosisContent = (
-          <>
-            <h3 className="font-semibold text-lg mb-2 text-green-700">Diagnóstico: Extração Calibrada</h3>
-            <p className="text-sm mb-2">Tempo de {actualTime}s e sabor equilibrado. Você encontrou a janela (sweet spot).</p>
-            <ul className="list-disc list-inside text-sm space-y-3">
-              <li><b>Próximo passo:</b> Trave o moedor em <b>{clicks} cliques</b>.</li>
-              <li><b>Visual:</b> {getCremaFeedback()}</li>
-              <li><b>Dica Pro:</b> Use a técnica RDT (borrifar 1-2 gotas de água nos grãos) para zerar a retenção estática no moedor.</li>
-            </ul>
-          </>
-        );
-      } else if (actualTime < 25) {
-        diagnosisContent = (
-          <>
-            <h3 className="font-semibold text-lg mb-2 text-orange-600">Diagnóstico: Sub-extração (Fluxo Rápido)</h3>
-            <p className="text-sm mb-2">Tempo curto de {actualTime}s. A água passou muito rápido, resultando em sabor azedo ou salgado.</p>
-            <ul className="list-disc list-inside text-sm space-y-3">
-              <li><b>Ação Principal:</b> Moer mais fino. Reduza para <b>{clicks - 1} cliques</b>.</li>
-              <li><b>Análise:</b> {getCremaFeedback()}</li>
-              <li><b>Distribuição:</b> Certifique-se de usar WDT para evitar canalização.</li>
-            </ul>
-          </>
-        );
-      } else if (actualTime > 35) {
-        diagnosisContent = (
-          <>
-            <h3 className="font-semibold text-lg mb-2 text-brown-700">Diagnóstico: Super-extração (Fluxo Lento)</h3>
-            <p className="text-sm mb-2">Tempo longo de {actualTime}s. O fluxo foi restrito demais, extraindo compostos amargos/adstringentes.</p>
-            <ul className="list-disc list-inside text-sm space-y-3">
-              <li><b>Ação Principal:</b> Moer mais grosso. Aumente para <b>{clicks + 1} cliques</b>.</li>
-              <li><b>Alternativa:</b> Se moer mais grosso deixar o café ralo, mantenha os cliques e diminua a dose em 0.5g.</li>
-              <li><b>Temperatura:</b> {roastTip[roast]}</li>
-            </ul>
-          </>
-        );
-      } else {
-        diagnosisContent = (
-          <>
-            <h3 className="font-semibold text-lg mb-2 text-red-600">Diagnóstico: Canalização Provável</h3>
-            <p className="text-sm mb-2">Tempo de {actualTime}s ideal, mas o sabor avaliado foi ruim (azedo/amargo). Sintoma clássico de canalização severa.</p>
-            <ul className="list-disc list-inside text-sm space-y-3">
-              <li><b>Ação Principal:</b> Não altere a moagem. O erro está na compactação/distribuição.</li>
-              <li><b>Técnica:</b> Use agulha WDT até o fundo. O tamper deve descer 100% reto.</li>
-            </ul>
-          </>
-        );
-      }
-    } else if (method === "v60") {
-      if (actualTime >= 120 && actualTime <= 150) {
-        diagnosisContent = (
-          <>
-            <h3 className="font-semibold text-lg mb-2 text-green-700">Diagnóstico: V60 Concentrado Ideal</h3>
-            <p className="text-sm mb-2">Tempo de {actualTime}s cravado na meta para proporções curtas.</p>
-            <ul className="list-disc list-inside text-sm space-y-3">
-              <li><b>Sabor:</b> Corpo denso próximo ao do expresso, mas com a clareza do papel.</li>
-              <li><b>Dica de Temperatura:</b> {roastTip[roast]}</li>
-            </ul>
-          </>
-        );
-      } else if (actualTime > 150) {
-        diagnosisContent = (
-          <>
-            <h3 className="font-semibold text-lg mb-2 text-orange-600">Diagnóstico: Choking (Entupimento)</h3>
-            <p className="text-sm mb-2">Tempo de {actualTime}s é muito longo. O filtro de papel no suporte reteve o fluxo.</p>
-            <ul className="list-disc list-inside text-sm space-y-3">
-              <li><b>Ação Principal:</b> Moagem mais grossa. Tente <b>{clicks + 1} cliques</b>.</li>
-              <li><b>Técnica:</b> Evite agitar muito a cama de café (swirl) durante os despejos para não forçar finos para o fundo.</li>
-            </ul>
-          </>
-        );
-      } else {
-        diagnosisContent = (
-          <>
-            <h3 className="font-semibold text-lg mb-2 text-blue-600">Diagnóstico: Sub-extração por Fluxo Rápido</h3>
-            <p className="text-sm mb-2">Com {actualTime}s, a água desceu rápido demais, resultando num café ácido.</p>
-            <ul className="list-disc list-inside text-sm space-y-3">
-              <li><b>Ação Principal:</b> Afine a moagem para <b>{clicks - 1} cliques</b>.</li>
-              <li><b>Técnica:</b> Divida o despejo de água em 2 ou 3 etapas para diminuir a pressão hidrostática.</li>
-            </ul>
-          </>
-        );
-      }
-    }
-
-    setDiagnosis(diagnosisContent);
-  }, []);
-
-  /** Handlers de Input especializados por escopo de dados */
-  const handleTopLevelChange = (e) => {
-    const { id, value } = e.target;
-    setInputs((prev) => ({ ...prev, [id]: value }));
-  };
-
-  const handleMethodChange = (e) => {
-    const value = e.target.value;
-    setInputs((prev) => {
-      const newInputs = { ...prev, method: value };
-      updateUI(newInputs);
-      return newInputs;
-    });
-  };
-
-  const handleExtractionChange = (e) => {
-    const { id, value } = e.target;
-    setInputs((prev) => {
-      const newInputs = { 
-        ...prev, 
-        [prev.method]: { ...prev[prev.method], [id]: value } 
-      };
-      updateUI(newInputs);
-      return newInputs;
-    });
-  };
-
-  const handleAccessoryChange = (e) => {
-    const { value, checked } = e.target;
-    setInputs((prev) => {
-      const newAcc = checked 
-        ? [...prev.accessories, value] 
-        : prev.accessories.filter(a => a !== value);
-      return { ...prev, accessories: newAcc };
-    });
-  };
-
-  const handleFiles = (files) => {
-    const newFiles = [];
-    for (const file of files) {
-      if (!file.type.startsWith("image/")) continue;
-      if (uploadedFiles.find((f) => f.name === file.name && f.size === file.size)) continue;
-      newFiles.push(file);
-    }
-    setUploadedFiles((prev) => [...prev, ...newFiles]);
-  };
-
-  const removeFile = (fileName) => {
-    setUploadedFiles((prev) => prev.filter((f) => f.name !== fileName));
-  };
-
-  const startCamera = async () => {
-    if (!("mediaDevices" in navigator && "getUserMedia" in navigator.mediaDevices)) {
-      alert("Seu navegador não suporta a API de câmera.");
+  const saveToFirebase = async (data) => {
+    if (!db) {
+      localStorage.setItem("barista_local_data", JSON.stringify(data));
       return;
     }
     try {
-      const constraints = { video: { facingMode: "environment" } };
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      cameraStreamRef.current = stream;
-      setCameraModalOpen(true);
-      setTimeout(() => {
-        if (cameraFeedRef.current) cameraFeedRef.current.srcObject = stream;
-      }, 50);
-    } catch (err) {
-      console.error("Erro ao acessar a câmera: ", err);
-      alert("Não foi possível acessar a câmera. Verifique as permissões.");
-    }
-  };
-
-  const stopCamera = () => {
-    if (cameraStreamRef.current) {
-      cameraStreamRef.current.getTracks().forEach((t) => t.stop());
-    }
-    if (cameraFeedRef.current) {
-      cameraFeedRef.current.srcObject = null;
-    }
-    cameraStreamRef.current = null;
-    setCameraModalOpen(false);
-  };
-
-  const saveLocally = (data) => {
-    try {
-      localStorage.setItem("meuexpresso.settings", JSON.stringify(data));
-      setFirebaseError("Configurações salvas localmente (Firebase indisponível).");
+      await setDoc(doc(db, "users", "config_barista"), data);
     } catch (e) {
-      console.error("Erro ao salvar localmente:", e);
-    }
-  };
-
-  const loadLocally = () => {
-    try {
-      const raw = localStorage.getItem("meuexpresso.settings");
-      if (!raw) return null;
-      return JSON.parse(raw);
-    } catch (e) {
-      return null;
+      localStorage.setItem("barista_local_data", JSON.stringify(data));
     }
   };
 
   useEffect(() => {
-    let mounted = true;
-    const doLoad = async () => {
-      setIsLoading(true);
-      try {
-        if (!db || firebaseUnavailableRef.current) {
-          const local = loadLocally();
-          if (local && mounted) {
-            const migrated = migrateLegacyData(local);
-            setInputs(migrated);
-            updateUI(migrated);
-            setFirebaseError("Carregado configuração local.");
-          } else if (mounted) {
-            updateUI(inputsRef.current);
-          }
-          return;
+    const loadData = async () => {
+      let data = null;
+      if (db) {
+        try {
+          const snap = await getDoc(doc(db, "users", "config_barista"));
+          if (snap.exists()) data = snap.data();
+        } catch (e) {
+          console.warn(
+            "Firebase bloqueado ou inacessível. Usando local storage.",
+          );
         }
-
-        const docRef = doc(db, "configurations", "default");
-        const docSnap = await getDoc(docRef);
-
-        if (!mounted) return;
-
-        if (docSnap.exists()) {
-          const migrated = migrateLegacyData(docSnap.data());
-          setInputs(migrated);
-          updateUI(migrated);
-        } else {
-          const local = loadLocally();
-          if (local && mounted) {
-            const migrated = migrateLegacyData(local);
-            setInputs(migrated);
-            updateUI(migrated);
-            setFirebaseError("Nenhuma configuração na nuvem. Usando dados locais.");
-            return;
-          }
-          updateUI(inputsRef.current);
-        }
-      } catch (error) {
-        const msg = String(error?.message || error);
-        if (msg.toLowerCase().includes("permission") || msg.toLowerCase().includes("insufficient")) {
-          firebaseUnavailableRef.current = true;
-        }
-        const local = loadLocally();
-        if (local && mounted) {
-          const migrated = migrateLegacyData(local);
-          setInputs(migrated);
-          updateUI(migrated);
-          setFirebaseError("Erro no Firebase. Carregado configuração local.");
-        } else if (mounted) {
-          updateUI(inputsRef.current);
-        }
-      } finally {
-        if (mounted) setIsLoading(false);
       }
+      if (!data) {
+        const local = localStorage.getItem("barista_local_data");
+        if (local) data = JSON.parse(local);
+      }
+      if (data) {
+        setSetups(data.setups || []);
+        setRecipes(data.recipes || []);
+        setActiveSetupId(data.activeSetupId || "");
+      }
+      setIsLoading(false);
     };
+    loadData();
+  }, []);
 
-    doLoad();
-    return () => { mounted = false; };
-  }, [updateUI]);
-
-  const takePhoto = () => {
-    const canvas = photoCanvasRef.current;
-    const video = cameraFeedRef.current;
-    if (!canvas || !video) return;
-
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const context = canvas.getContext("2d");
-    context.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-    canvas.toBlob(
-      (blob) => {
-        const timestamp = new Date().toISOString();
-        const newFile = new File([blob], `captura-${timestamp}.jpg`, { type: "image/jpeg" });
-        handleFiles([newFile]);
-      },
-      "image/jpeg",
-      0.95
-    );
-    stopCamera();
-  };
-
-  const fileToGenerativePart = async (file) => {
-    const base64EncodedDataPromise = new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result.split(",")[1]);
-      reader.readAsDataURL(file);
+  const handleAddSetup = () => {
+    if (!newSetup.name) return alert("Dê um nome ao seu setup.");
+    const updatedSetups = [...setups, {...newSetup, id: Date.now().toString()}];
+    setSetups(updatedSetups);
+    setIsAddingSetup(false);
+    setNewSetup({
+      name: "",
+      machine: "",
+      grinder: "",
+      method: "espresso",
+      accessories: [],
     });
-    return {
-      inlineData: {
-        data: await base64EncodedDataPromise,
-        mimeType: file.type,
-      },
-    };
+    saveToFirebase({setups: updatedSetups, recipes, activeSetupId});
   };
+
+  const removeSetup = (id) => {
+    const updated = setups.filter((s) => s.id !== id);
+    setSetups(updated);
+    const newActiveId = activeSetupId === id ? "" : activeSetupId;
+    setActiveSetupId(newActiveId);
+    saveToFirebase({setups: updated, recipes, activeSetupId: newActiveId});
+  };
+
+  const handleSaveRecipe = () => {
+    if (!activeSetupId)
+      return alert("Selecione um setup antes de salvar a receita.");
+
+    const recipeName = prompt("Nome da Receita (Ex: Etiópia 15 clicks):");
+    if (!recipeName) return;
+
+    const newRecipe = {
+      id: Date.now().toString(),
+      name: recipeName,
+      setupId: activeSetupId,
+      extraction: {...extraction},
+      date: new Date().toLocaleDateString("pt-BR"),
+    };
+
+    const updatedRecipes = [newRecipe, ...recipes];
+    setRecipes(updatedRecipes);
+    saveToFirebase({setups, recipes: updatedRecipes, activeSetupId});
+  };
+
+  const loadRecipe = (recipe) => {
+    const setupExists = setups.find((s) => s.id === recipe.setupId);
+    if (!setupExists) {
+      return alert(
+        "O setup associado a esta receita foi excluído. Crie um novo setup similar.",
+      );
+    }
+    setActiveSetupId(recipe.setupId);
+    setExtraction(recipe.extraction);
+    saveToFirebase({setups, recipes, activeSetupId: recipe.setupId});
+  };
+
+  const deleteRecipe = (id) => {
+    const updatedRecipes = recipes.filter((r) => r.id !== id);
+    setRecipes(updatedRecipes);
+    saveToFirebase({setups, recipes: updatedRecipes, activeSetupId});
+  };
+
+  const activeSetup = setups.find((s) => s.id === activeSetupId);
 
   const analyzeWithAI = async () => {
-    setAiDiagnosis(
-      <div className="p-4 bg-purple-100 rounded-lg animate-pulse">
-        <h3 className="font-semibold text-lg mb-2 text-purple-700">Analisando com IA...</h3>
-        <p className="text-sm text-purple-600">Enviando parâmetros e imagens para o Gemini AI...</p>
-      </div>
-    );
+    if (!activeSetup) return alert("Selecione um setup ativo.");
+
+    setIsAnalyzing(true);
+    setAiDiagnosis(null);
 
     try {
-      const imageParts = await Promise.all(uploadedFiles.map(fileToGenerativePart));
       const response = await fetch("/api/analyze", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ inputs, imageParts }),
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({extraction, activeSetup}),
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Falha na API de análise.");
-      }
-
-      const { analysis } = await response.json();
+      const data = await response.json();
+      if (data.error) throw new Error(data.error);
+      setAiDiagnosis(data.analysis);
+    } catch (e) {
       setAiDiagnosis(
-        <div className="ai-content p-4 border border-purple-300 rounded-lg" dangerouslySetInnerHTML={{ __html: analysis }} />
+        `<div class="p-4 bg-red-50 text-red-600 rounded-xl font-bold">Erro: ${e.message}</div>`,
       );
-    } catch (error) {
-      setAiDiagnosis(
-        <div className="p-4 bg-red-100 rounded-lg">
-          <h3 className="font-semibold text-lg mb-2 text-red-700">Erro na Análise</h3>
-          <p className="text-sm text-red-600">{error.message}</p>
-        </div>
-      );
+    } finally {
+      setIsAnalyzing(false);
     }
   };
 
-  const saveSettings = async () => {
-    try {
-      if (!db || firebaseUnavailableRef.current) {
-        setSuccessMessage("Configurações salvas localmente.");
-        saveLocally(inputs);
-        return;
-      }
-      const docRef = doc(db, "configurations", "default");
-      await setDoc(docRef, inputs);
-      setSuccessMessage("Configurações salvas com sucesso no Firebase!");
-      setTimeout(() => setSuccessMessage(null), 3000);
-    } catch (error) {
-      const msg = String(error?.message || error);
-      if (msg.toLowerCase().includes("permission") || msg.toLowerCase().includes("insufficient")) {
-        firebaseUnavailableRef.current = true;
-        saveLocally(inputs);
-        alert("Sem permissão de gravação. Salvo localmente.");
-      } else {
-        alert("Não foi possível salvar as configurações.");
-      }
-    }
-  };
-
-  if (isLoading) {
+  if (isLoading)
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-50">
-        <div className="text-center">
-          <svg className="mx-auto h-12 w-12 text-blue-600 animate-spin" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-          </svg>
-          <p className="mt-4 text-lg font-medium text-gray-700">Carregando configurações...</p>
-        </div>
+      <div className="min-h-screen flex items-center justify-center bg-neutral-50 text-neutral-500 font-medium">
+        Iniciando Laboratório...
       </div>
     );
-  }
-
-  const currentMethodInputs = inputs[inputs.method];
 
   return (
-    <>
-      <div className="min-h-screen w-full bg-neutral-50 transition-colors duration-300">
-        <div className="flex flex-col space-y-6 w-[90%] md:w-[80%] max-w-3xl mx-auto px-4 py-10">
-          
-          {firebaseError && !firebaseError.includes("salvas no") && (
-            <div className="p-3 rounded-xl bg-yellow-50 border border-yellow-200 text-yellow-900 shadow-sm">
-              <strong>Atenção:</strong> {firebaseError}
-            </div>
-          )}
-          {successMessage && (
-            <div className="p-3 rounded-xl bg-green-50 border border-green-200 text-green-900 shadow-sm">
-              <strong>Sucesso:</strong> {successMessage}
-            </div>
-          )}
+    <div className="min-h-screen bg-neutral-50 pb-20">
+      <div className="max-w-2xl mx-auto px-4 py-8 space-y-6">
+        <header className="mb-8">
+          <h1 className="text-3xl font-black text-neutral-900 tracking-tighter">
+            BARISTA PRO
+          </h1>
+          <p className="text-neutral-500">
+            Gestão de Setup & Calibração Sensorial
+          </p>
+        </header>
 
-          <header className="mb-4">
-            <h1 className="text-3xl font-semibold tracking-tight text-neutral-900">
-              Barista de Bolso — Meu Expresso
-            </h1>
-            <p className="text-sm text-neutral-500 mt-1">Calibre suas extrações de acordo com seu equipamento.</p>
-          </header>
-
-          {/* Box 1: Meu Setup */}
-          <section className="p-6 bg-white rounded-2xl shadow-sm border border-neutral-200">
-            <button 
-              onClick={() => setIsSetupOpen(!isSetupOpen)}
-              className="w-full flex justify-between items-center focus:outline-none"
-              title="Expandir/Recolher Setup"
+        {/* SEÇÃO: MEUS SETUPS */}
+        <section className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-lg font-bold text-neutral-800">
+              Meus Equipamentos
+            </h2>
+            <button
+              onClick={() => setIsAddingSetup(!isAddingSetup)}
+              className="bg-neutral-900 text-white text-xs px-4 py-2 rounded-full font-bold hover:bg-blue-600 transition-colors"
             >
-              <h2 className="text-xl font-medium text-neutral-900">Meu Setup</h2>
-              <svg className={`w-5 h-5 text-neutral-500 transition-transform duration-200 ${isSetupOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+              {isAddingSetup ? "FECHAR" : "ADICIONAR"}
             </button>
-            
-            {isSetupOpen && (
-              <div className="mt-6 animate-in fade-in slide-in-from-top-2 space-y-6">
-                <div className="grid grid-cols-1 gap-4">
-                  <div>
-                    <label htmlFor="machine" className="block text-sm font-medium text-neutral-600">Cafeteira / Método Base</label>
-                    <input type="text" id="machine" value={inputs.machine} onChange={handleTopLevelChange} placeholder="Ex: Oster Double Digital, V60 Inox" className="mt-1 w-full rounded-lg px-3 py-2 border border-neutral-300 bg-white text-neutral-900 focus:ring-2 focus:ring-blue-200 outline-none" />
-                  </div>
-                  <div>
-                    <label htmlFor="grinder" className="block text-sm font-medium text-neutral-600">Moedor</label>
-                    <input type="text" id="grinder" value={inputs.grinder} onChange={handleTopLevelChange} placeholder="Ex: Timemore C3" className="mt-1 w-full rounded-lg px-3 py-2 border border-neutral-300 bg-white text-neutral-900 focus:ring-2 focus:ring-blue-200 outline-none" />
-                  </div>
-                </div>
+          </div>
 
-                <div className="border-t border-neutral-100 pt-4">
-                  <label className="block text-sm font-medium text-neutral-600 mb-3">Acessórios</label>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div>
-                      <h4 className="text-xs font-semibold text-neutral-400 uppercase mb-2">Expresso</h4>
-                      <div className="space-y-2">
-                        {ACCESSORY_LIST.espresso.map(acc => (
-                          <label key={acc.id} className="flex items-center space-x-2 text-sm text-neutral-700 cursor-pointer">
-                            <input type="checkbox" value={acc.label} checked={inputs.accessories.includes(acc.label)} onChange={handleAccessoryChange} className="rounded text-blue-600 focus:ring-blue-500 border-neutral-300" />
-                            <span>{acc.label}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                    <div>
-                      <h4 className="text-xs font-semibold text-neutral-400 uppercase mb-2">Filtro / Coado</h4>
-                      <div className="space-y-2">
-                        {ACCESSORY_LIST.filtro.map(acc => (
-                          <label key={acc.id} className="flex items-center space-x-2 text-sm text-neutral-700 cursor-pointer">
-                            <input type="checkbox" value={acc.label} checked={inputs.accessories.includes(acc.label)} onChange={handleAccessoryChange} className="rounded text-blue-600 focus:ring-blue-500 border-neutral-300" />
-                            <span>{acc.label}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                    <div>
-                      <h4 className="text-xs font-semibold text-neutral-400 uppercase mb-2">Geral</h4>
-                      <div className="space-y-2">
-                        {ACCESSORY_LIST.geral.map(acc => (
-                          <label key={acc.id} className="flex items-center space-x-2 text-sm text-neutral-700 cursor-pointer">
-                            <input type="checkbox" value={acc.label} checked={inputs.accessories.includes(acc.label)} onChange={handleAccessoryChange} className="rounded text-blue-600 focus:ring-blue-500 border-neutral-300" />
-                            <span>{acc.label}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
+          {isAddingSetup && (
+            <div className="bg-neutral-50 p-4 rounded-2xl mb-6 space-y-4 animate-in slide-in-from-top-2">
+              <input
+                placeholder="Apelido (ex: Setup da Oster)"
+                className="w-full p-3 bg-white border rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+                value={newSetup.name}
+                onChange={(e) =>
+                  setNewSetup({...newSetup, name: e.target.value})
+                }
+              />
+              <div className="grid grid-cols-2 gap-3">
+                <select
+                  className="p-3 bg-white border rounded-xl"
+                  value={newSetup.method}
+                  onChange={(e) =>
+                    setNewSetup({
+                      ...newSetup,
+                      method: e.target.value,
+                      accessories: [],
+                    })
+                  }
+                >
+                  <option value="espresso">Expresso</option>
+                  <option value="coado">Coado / Filtro</option>
+                </select>
+                <input
+                  placeholder="Máquina"
+                  className="p-3 bg-white border rounded-xl"
+                  value={newSetup.machine}
+                  onChange={(e) =>
+                    setNewSetup({...newSetup, machine: e.target.value})
+                  }
+                />
+              </div>
+              <input
+                placeholder="Moedor"
+                className="p-3 bg-white border rounded-xl w-full"
+                value={newSetup.grinder}
+                onChange={(e) =>
+                  setNewSetup({...newSetup, grinder: e.target.value})
+                }
+              />
+
+              <div className="space-y-2">
+                <p className="text-xs font-bold text-neutral-400 uppercase">
+                  Acessórios para {newSetup.method}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    ...ACCESSORY_LIST[newSetup.method],
+                    ...ACCESSORY_LIST.geral,
+                  ].map((acc) => (
+                    <label
+                      key={acc}
+                      className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-full border text-sm cursor-pointer hover:border-blue-500"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={newSetup.accessories.includes(acc)}
+                        onChange={(e) => {
+                          const list = e.target.checked
+                            ? [...newSetup.accessories, acc]
+                            : newSetup.accessories.filter((a) => a !== acc);
+                          setNewSetup({...newSetup, accessories: list});
+                        }}
+                      />{" "}
+                      {acc}
+                    </label>
+                  ))}
                 </div>
               </div>
-            )}
-          </section>
+              <button
+                onClick={handleAddSetup}
+                className="w-full bg-blue-600 text-white p-4 rounded-xl font-bold shadow-lg shadow-blue-100"
+              >
+                SALVAR SETUP
+              </button>
+            </div>
+          )}
 
-          {/* Box 2: Parâmetros de Extração */}
-          <section className="p-6 bg-white rounded-2xl shadow-sm border border-neutral-200">
-            <button 
-              onClick={() => setIsExtractionOpen(!isExtractionOpen)}
-              className="w-full flex justify-between items-center focus:outline-none"
-              title="Expandir/Recolher Extração"
+          <div className="flex gap-2">
+            <select
+              value={activeSetupId}
+              onChange={(e) => {
+                setActiveSetupId(e.target.value);
+                saveToFirebase({
+                  setups,
+                  recipes,
+                  activeSetupId: e.target.value,
+                });
+              }}
+              className="flex-1 p-4 bg-neutral-100 border-none rounded-2xl font-bold text-neutral-700 outline-none ring-2 ring-transparent focus:ring-blue-500"
             >
-              <h2 className="text-xl font-medium text-neutral-900">Extração</h2>
-              <svg className={`w-5 h-5 text-neutral-500 transition-transform duration-200 ${isExtractionOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
-            </button>
-            
-            {isExtractionOpen && (
-              <div className="mt-6 animate-in fade-in slide-in-from-top-2">
-                
-                <div className="mb-6">
-                  <label htmlFor="method" className="block text-sm font-medium text-neutral-600">Modo de Extração</label>
-                  <select 
-                    id="method" 
-                    value={inputs.method} 
-                    onChange={handleMethodChange} 
-                    className="mt-1 w-full rounded-lg px-3 py-2 border border-neutral-300 bg-neutral-50 text-neutral-900 font-medium outline-none focus:ring-2 focus:ring-blue-200"
+              <option value="">Selecione um Perfil...</option>
+              {setups.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} ({s.method === "espresso" ? "☕" : "💧"})
+                </option>
+              ))}
+            </select>
+            {activeSetupId && (
+              <button
+                onClick={() => removeSetup(activeSetupId)}
+                className="p-4 bg-red-50 text-red-500 rounded-2xl hover:bg-red-100 transition-colors"
+              >
+                🗑️
+              </button>
+            )}
+          </div>
+        </section>
+
+        {/* SEÇÃO: RECEITAS SALVAS */}
+        {recipes.length > 0 && (
+          <section className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200">
+            <h2 className="text-lg font-bold text-neutral-800 mb-4">
+              Minhas Receitas
+            </h2>
+            <div className="space-y-3 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
+              {recipes.map((recipe) => (
+                <div
+                  key={recipe.id}
+                  className="flex justify-between items-center bg-neutral-50 p-3 rounded-xl border border-neutral-100"
+                >
+                  <div
+                    className="cursor-pointer flex-1"
+                    onClick={() => loadRecipe(recipe)}
                   >
-                    <option value="espresso">Expresso (Máquina)</option>
-                    <option value="v60">Filtro (V60 / Coado)</option>
-                  </select>
+                    <h4 className="font-bold text-neutral-800 text-sm">
+                      {recipe.name}
+                    </h4>
+                    <p className="text-[10px] text-neutral-400 font-medium">
+                      {recipe.date} • Dose: {recipe.extraction.dose}g • Tempo:{" "}
+                      {recipe.extraction.extractionTime}s
+                    </p>
+                  </div>
+                  <div className="flex gap-2 ml-4">
+                    <button
+                      onClick={() => loadRecipe(recipe)}
+                      className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors"
+                    >
+                      USAR
+                    </button>
+                    <button
+                      onClick={() => deleteRecipe(recipe.id)}
+                      className="text-xs font-bold text-red-500 bg-red-50 px-3 py-1.5 rounded-lg hover:bg-red-100 transition-colors"
+                    >
+                      X
+                    </button>
+                  </div>
                 </div>
+              ))}
+            </div>
+          </section>
+        )}
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <label htmlFor="dose" className="block text-sm font-medium text-neutral-600">Dose Entrada (g)</label>
-                    <input type="number" id="dose" value={currentMethodInputs.dose} onChange={handleExtractionChange} step="0.1" className="mt-1 w-full rounded-lg px-3 py-2 border border-neutral-300 bg-white text-neutral-900 focus:ring-2 focus:ring-blue-200 outline-none" />
-                  </div>
-                  <div>
-                    <label htmlFor="cupYield" className="block text-sm font-medium text-neutral-600">Rendimento Xícara (g)</label>
-                    <input type="number" id="cupYield" value={currentMethodInputs.cupYield} onChange={handleExtractionChange} step="0.1" placeholder={inputs.method === "v60" ? "Ex: 120" : "Ex: 30"} className="mt-1 w-full rounded-lg px-3 py-2 border border-neutral-300 bg-white text-neutral-900 focus:ring-2 focus:ring-blue-200 outline-none" />
-                  </div>
-                  <div>
-                    <label htmlFor="clicks" className="block text-sm font-medium text-neutral-600">Moagem (cliques/nível)</label>
-                    <input type="number" id="clicks" value={currentMethodInputs.clicks} onChange={handleExtractionChange} className="mt-1 w-full rounded-lg px-3 py-2 border border-neutral-300 bg-white text-neutral-900 focus:ring-2 focus:ring-blue-200 outline-none" />
-                  </div>
-                  <div>
-                    <label htmlFor="roast" className="block text-sm font-medium text-neutral-600">Nível de Torra</label>
-                    <select id="roast" value={currentMethodInputs.roast} onChange={handleExtractionChange} className="mt-1 w-full rounded-lg px-3 py-2 border border-neutral-300 bg-white text-neutral-900 focus:ring-2 focus:ring-blue-200 outline-none">
-                      <option value="light">Clara</option>
-                      <option value="medium">Média</option>
-                      <option value="dark">Escura</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label htmlFor="extractionTime" className="block text-sm font-medium text-neutral-600">Tempo Total (s)</label>
-                    <input type="number" id="extractionTime" value={currentMethodInputs.extractionTime} onChange={handleExtractionChange} className="mt-1 w-full rounded-lg px-3 py-2 border border-neutral-300 bg-white text-neutral-900 focus:ring-2 focus:ring-blue-200 outline-none" />
-                  </div>
-                  
-                  {inputs.method === "espresso" && (
-                    <div>
-                      <label htmlFor="crema" className="block text-sm font-medium text-neutral-600">Resultado da Crema</label>
-                      <select id="crema" value={currentMethodInputs.crema} onChange={handleExtractionChange} className="mt-1 w-full rounded-lg px-3 py-2 border border-neutral-300 bg-white text-neutral-900 focus:ring-2 focus:ring-blue-200 outline-none">
-                        <option value="ideal">Densa e cor de avelã</option>
-                        <option value="pale">Pálida e fina</option>
-                        <option value="bubbly">Bolhosa / Espumosa</option>
-                        <option value="dark">Muito escura / manchada</option>
-                      </select>
+        {/* SEÇÃO: EXTRAÇÃO E MATRIZ SENSORIAL */}
+        {activeSetup && (
+          <section className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
+            <div className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-lg font-bold">Parâmetros de Extração</h2>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-neutral-400 uppercase">
+                    Dose Entrada (g)
+                  </label>
+                  <input
+                    type="number"
+                    className="w-full p-3 bg-neutral-50 rounded-xl border-none outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="18"
+                    value={extraction.dose}
+                    onChange={(e) =>
+                      setExtraction({...extraction, dose: e.target.value})
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-neutral-400 uppercase">
+                    Rendimento (g)
+                  </label>
+                  <input
+                    type="number"
+                    className="w-full p-3 bg-neutral-50 rounded-xl border-none outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="36"
+                    value={extraction.cupYield}
+                    onChange={(e) =>
+                      setExtraction({...extraction, cupYield: e.target.value})
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-neutral-400 uppercase">
+                    Tempo (s)
+                  </label>
+                  <input
+                    type="number"
+                    className="w-full p-3 bg-neutral-50 rounded-xl border-none outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="28"
+                    value={extraction.extractionTime}
+                    onChange={(e) =>
+                      setExtraction({
+                        ...extraction,
+                        extractionTime: e.target.value,
+                      })
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-neutral-400 uppercase">
+                    Moagem (cliques)
+                  </label>
+                  <input
+                    type="number"
+                    className="w-full p-3 bg-neutral-50 rounded-xl border-none outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="8"
+                    value={extraction.clicks}
+                    onChange={(e) =>
+                      setExtraction({...extraction, clicks: e.target.value})
+                    }
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200">
+              <h2 className="text-lg font-bold mb-2">O que você sentiu?</h2>
+              <p className="text-xs text-neutral-500 mb-6">
+                Seja honesto com seu paladar, a IA cuidará do resto.
+              </p>
+
+              <div className="space-y-6">
+                {[
+                  {
+                    key: "acidity",
+                    label: "Acidez",
+                    desc: "Língua pinicando ou salivação intensa?",
+                    colors: "bg-yellow-400",
+                  },
+                  {
+                    key: "bitterness",
+                    label: "Amargor",
+                    desc: "Sensação de remédio ou café queimado?",
+                    colors: "bg-orange-600",
+                  },
+                  {
+                    key: "body",
+                    label: "Corpo",
+                    desc: "Textura: Chá ralo ou Leite cremoso?",
+                    colors: "bg-neutral-800",
+                  },
+                ].map((sens) => (
+                  <div key={sens.key} className="space-y-2">
+                    <div className="flex justify-between items-end">
+                      <span className="font-bold text-neutral-800">
+                        {sens.label}
+                      </span>
+                      <span className="text-[10px] text-neutral-400 uppercase">
+                        {sens.desc}
+                      </span>
                     </div>
-                  )}
-
-                  <div className="md:col-span-2">
-                    <label htmlFor="taste" className="block text-sm font-medium text-neutral-600">Resultado do Sabor</label>
-                    <input type="range" id="taste" min="1" max="3" value={currentMethodInputs.taste} onChange={handleExtractionChange} className="w-full mt-3 h-2 bg-neutral-200 rounded-lg appearance-none cursor-pointer" />
-                    <div className="flex justify-between text-xs text-neutral-500 mt-2">
-                      <span>Ácido (Sub)</span>
-                      <span className="font-semibold text-green-700">Equilibrado</span>
-                      <span>Amargo (Super)</span>
-                    </div>
-                  </div>
-
-                  <div className="md:col-span-2 mt-4 pt-4 border-t border-neutral-100">
-                    <label className="block text-sm font-medium text-neutral-600 mb-3">Fotos da Extração (Opcional)</label>
-                    <div ref={imagePreviewRef} className="flex flex-wrap gap-4">
-                      {uploadedFiles.map((file, index) => (
-                        <div key={index} className="relative w-24 h-24 rounded-lg overflow-hidden bg-neutral-100 shadow-sm border border-neutral-200">
-                          <img src={URL.createObjectURL(file)} alt={file.name} className="w-full h-full object-cover" />
-                          <button onClick={() => removeFile(file.name)} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs font-bold shadow">&times;</button>
-                        </div>
+                    <div className="flex gap-2">
+                      {["low", "medium", "high"].map((level) => (
+                        <button
+                          key={level}
+                          onClick={() =>
+                            setExtraction({
+                              ...extraction,
+                              sensory: {
+                                ...extraction.sensory,
+                                [sens.key]: level,
+                              },
+                            })
+                          }
+                          className={`flex-1 py-3 rounded-xl text-xs font-black transition-all ${
+                            extraction.sensory[sens.key] === level
+                              ? `${sens.colors} text-white scale-105 shadow-md`
+                              : "bg-neutral-100 text-neutral-400"
+                          }`}
+                        >
+                          {level === "low"
+                            ? "BAIXA"
+                            : level === "medium"
+                              ? "EQUILIBRADA"
+                              : "ALTA"}
+                        </button>
                       ))}
                     </div>
                   </div>
-
-                  <div className="md:col-span-2 mt-4 flex justify-around items-center gap-2 border-t border-neutral-100 pt-6">
-                    <div className="flex flex-col items-center gap-2">
-                      <button onClick={saveSettings} title="Salvar Dados na Nuvem" className="w-14 h-14 bg-neutral-800 hover:bg-neutral-900 text-white font-semibold p-3 rounded-full flex items-center justify-center transition-shadow shadow-md">
-                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"></path></svg>
-                      </button>
-                      <span className="text-[11px] font-medium text-neutral-600">Salvar</span>
-                    </div>
-
-                    <div className="flex flex-col items-center gap-2">
-                      <label htmlFor="photo-upload" title="Anexar Fotos da Galeria" className="w-14 h-14 cursor-pointer bg-blue-600 hover:bg-blue-700 text-white font-semibold p-3 rounded-full flex items-center justify-center transition-transform transform hover:-translate-y-0.5 shadow-md">
-                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
-                      </label>
-                      <span className="text-[11px] font-medium text-neutral-600">Anexar Imagem</span>
-                      <input id="photo-upload" type="file" className="hidden" accept="image/*" multiple onChange={(e) => handleFiles(e.target.files)} />
-                    </div>
-                    
-                    <div className="flex flex-col items-center gap-2">
-                      <button onClick={startCamera} title="Tirar Foto do Equipamento/Crema" className="w-14 h-14 bg-green-600 hover:bg-green-700 text-white font-semibold p-3 rounded-full flex items-center justify-center transition-transform transform hover:-translate-y-0.5 shadow-md">
-                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path></svg>
-                      </button>
-                      <span className="text-[11px] font-medium text-neutral-600">Câmera</span>
-                    </div>
-
-                    <div className="flex flex-col items-center gap-2">
-                      <button onClick={analyzeWithAI} title="Solicitar Análise da IA Gemini" className="w-14 h-14 bg-purple-600 hover:bg-purple-700 text-white font-semibold p-3 rounded-full flex items-center justify-center transition-transform transform hover:scale-105 shadow-md">
-                        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path></svg>
-                      </button>
-                      <span className="text-[11px] font-medium text-neutral-600">Analisar com IA</span>
-                    </div>
-                  </div>
-                </div>
+                ))}
               </div>
-            )}
-          </section>
 
-          {/* Box 3: Telemetria & Diagnóstico.*/}
-          <section className="p-6 bg-white rounded-2xl shadow-sm border border-neutral-200">
-            <button 
-              onClick={() => setIsTelemetryOpen(!isTelemetryOpen)}
-              className="w-full flex justify-between items-center focus:outline-none"
-              title="Expandir/Recolher Telemetria"
-            >
-              <h2 className="text-xl font-medium text-neutral-900">Telemetria & Diagnóstico</h2>
-              <svg className={`w-5 h-5 text-neutral-500 transition-transform duration-200 ${isTelemetryOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
-            </button>
-            
-            {isTelemetryOpen && (
-              <div className="mt-6 animate-in fade-in slide-in-from-top-2">
-                <div className="mb-4 text-sm text-neutral-700 p-4 bg-neutral-50 rounded-lg border border-neutral-100">
-                  {initialSettings}
-                </div>
-                {aiDiagnosis ? (
-                  <div className="mt-6">{aiDiagnosis}</div>
-                ) : (
-                  <div className="border-t border-neutral-100 pt-4 text-neutral-800">
-                    {diagnosis}
-                  </div>
-                )}
+              <div className="mt-8 flex gap-3">
+                <button
+                  onClick={handleSaveRecipe}
+                  className="flex-1 bg-green-100 text-green-700 p-4 rounded-2xl font-black text-sm shadow-sm hover:bg-green-200 active:scale-95 transition-all"
+                >
+                  💾 SALVAR RECEITA
+                </button>
+                <button
+                  onClick={analyzeWithAI}
+                  disabled={isAnalyzing}
+                  className="flex-[2] bg-gradient-to-r from-purple-600 to-blue-600 text-white p-4 rounded-2xl font-black text-sm shadow-xl shadow-blue-100 flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-70 disabled:scale-100"
+                >
+                  {isAnalyzing ? (
+                    <>
+                      <svg
+                        className="animate-spin h-5 w-5 text-white"
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                      >
+                        <circle
+                          className="opacity-25"
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          stroke="currentColor"
+                          strokeWidth="4"
+                        ></circle>
+                        <path
+                          className="opacity-75"
+                          fill="currentColor"
+                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                        ></path>
+                      </svg>
+                      ANALISANDO...
+                    </>
+                  ) : (
+                    "🪄 ANALISAR EXTRAÇÃO"
+                  )}
+                </button>
               </div>
-            )}
-          </section>
-
-        </div>
-      </div>
-
-      {isCameraModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50 p-4">
-          <div className="bg-white p-4 rounded-2xl max-w-lg w-full">
-            <h3 className="text-lg font-semibold mb-2 text-center text-neutral-900">Capturar Foto</h3>
-            <video id="camera-feed" className="w-full rounded-lg bg-black" autoPlay playsInline ref={cameraFeedRef}></video>
-            <div className="mt-4 flex justify-center gap-4">
-              <button onClick={takePhoto} className="bg-blue-600 text-white font-semibold py-2 px-6 rounded-lg">Tirar Foto</button>
-              <button onClick={stopCamera} className="bg-neutral-200 text-neutral-800 font-semibold py-2 px-4 rounded-lg">Cancelar</button>
             </div>
+          </section>
+        )}
+
+        {/* ÁREA DE DIAGNÓSTICO ESTILIZADA */}
+        {aiDiagnosis && !isAnalyzing && (
+          <div className="bg-white rounded-3xl p-6 sm:p-8 border border-neutral-200 shadow-xl animate-in fade-in slide-in-from-bottom-8 duration-500 mt-8">
+            <h3 className="text-xl font-black mb-6 flex items-center gap-3 text-neutral-800 border-b border-neutral-100 pb-4">
+              <span className="bg-purple-100 text-xl p-2.5 rounded-xl shadow-sm">
+                🤖
+              </span>{" "}
+              Laudo do Barista AI
+            </h3>
+            {/* O wrapper não usa 'prose' para não sobrescrever o Tailwind gerado pela IA */}
+            <div
+              className="w-full"
+              dangerouslySetInnerHTML={{__html: aiDiagnosis}}
+            />
           </div>
-        </div>
-      )}
-      <canvas id="photo-canvas" className="hidden" ref={photoCanvasRef}></canvas>
-    </>
+        )}
+      </div>
+    </div>
   );
 };
 
