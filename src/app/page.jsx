@@ -519,47 +519,59 @@ const HomePage = () => {
         )}
 
         {!isExtracting && !viewingRecipe && recipes.length > 0 && (
-          <section className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200 animate-in fade-in">
+          <section className="bg-white rounded-3xl p-6 shadow-sm border border-neutral-200 animate-in fade-in h-full">
             <h2 className="text-lg font-bold text-neutral-800 mb-4">
               Minhas Receitas
             </h2>
-            <div className="space-y-3 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
               {recipes.map((recipe) => {
                 const setup = setups.find((s) => s.id === recipe.setupId);
                 const methodIcon = setup?.method === "espresso" ? "☕" : "💧";
                 return (
                   <div
                     key={recipe.id}
-                    className="flex justify-between items-center bg-neutral-50 p-3 rounded-xl border border-neutral-100 group"
+                    className="bg-neutral-50 p-3 rounded-xl border border-neutral-100 group flex flex-col gap-2"
                   >
                     <div
-                      className="cursor-pointer flex-1 flex items-center gap-3"
+                      className="cursor-pointer flex-1"
                       onClick={() => viewRecipeCard(recipe)}
                     >
-                      <div className="flex items-center justify-center w-10 h-10 bg-white rounded-xl border border-neutral-200 shadow-sm text-lg shrink-0">
-                        {methodIcon}
+                      <div className="flex items-start gap-2.5">
+                        <div className="flex items-center justify-center w-6 h-6 bg-white rounded-md border border-neutral-200 text-xs shrink-0">
+                          {methodIcon}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <h4 className="font-bold text-neutral-800 text-sm group-hover:text-blue-600 transition-colors leading-tight truncate">
+                            {recipe.name}
+                          </h4>
+                          <p className="text-[11px] text-neutral-500 font-medium mt-0.5 leading-tight">
+                            {recipe.date}
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <h4 className="font-bold text-neutral-800 text-sm group-hover:text-blue-600 transition-colors leading-tight">
-                          {recipe.name}
-                        </h4>
-                        <p className="text-[10px] text-neutral-400 font-medium mt-1">
-                          {recipe.date} • {setup?.name || "Desconhecido"} •
-                          Dose: {recipe.extraction.dose}g • Tempo:{" "}
-                          {recipe.extraction.extractionTime}s
+
+                      <div className="mt-2 grid grid-cols-2 gap-1.5">
+                        <p className="text-[11px] text-neutral-600 font-medium bg-white/80 border border-neutral-200 rounded-md px-2 py-1 truncate">
+                          {setup?.name || "Desconhecido"}
+                        </p>
+                        <p className="text-[11px] text-neutral-700 font-semibold bg-white/80 border border-neutral-200 rounded-md px-2 py-1 text-center">
+                          {recipe.extraction.dose}g
+                        </p>
+                        <p className="col-span-2 text-[11px] text-neutral-700 font-semibold bg-white/80 border border-neutral-200 rounded-md px-2 py-1 text-center">
+                          Tempo: {recipe.extraction.extractionTime}s
                         </p>
                       </div>
                     </div>
-                    <div className="flex gap-2 ml-4 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                    <div className="grid grid-cols-2 gap-1.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                       <button
                         onClick={() => editRecipe(recipe)}
-                        className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-2 rounded-lg hover:bg-amber-100 transition-colors"
+                        className="text-[11px] font-bold text-amber-700 bg-amber-50 px-2 py-1.5 rounded-md hover:bg-amber-100 transition-colors"
                       >
                         ✏️
                       </button>
                       <button
                         onClick={() => requestDeleteRecipe(recipe.id)}
-                        className="text-[10px] font-bold text-red-500 bg-red-50 px-2 py-2 rounded-lg hover:bg-red-100 transition-colors"
+                        className="text-[11px] font-bold text-red-600 bg-red-50 px-2 py-1.5 rounded-md hover:bg-red-100 transition-colors"
                       >
                         X
                       </button>
